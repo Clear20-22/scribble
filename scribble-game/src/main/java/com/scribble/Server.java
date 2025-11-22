@@ -41,10 +41,15 @@ public class Server {
         return rooms.computeIfAbsent(roomName, k -> new Room(roomName));
     }
 
+    public java.util.List<String> getRoomNames() {
+        return new java.util.ArrayList<>(rooms.keySet());
+    }
+
     public void removeRoomIfEmpty(String roomName) {
         Room room = rooms.get(roomName);
         if (room != null && room.getPlayerCount() == 0) {
             rooms.remove(roomName);
+            System.out.println("Removed empty room: " + roomName);
         }
     }
 

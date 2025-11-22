@@ -43,6 +43,9 @@ public class ClientHandler implements Runnable {
 
     private void handleMessage(Message message) {
         switch (message.getType()) {
+            case "LIST_ROOMS":
+                sendMessage(new RoomListMessage(server.getRoomNames()));
+                break;
             case "JOIN":
                 JoinMessage join = (JoinMessage) message;
                 playerName = join.getPlayerName();

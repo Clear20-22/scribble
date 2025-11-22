@@ -51,6 +51,10 @@ public class Client {
 
     private void handleMessage(Message message) {
         switch (message.getType()) {
+            case "ROOM_LIST":
+                RoomListMessage roomList = (RoomListMessage) message;
+                gui.updateRoomList(roomList.getRooms());
+                break;
             case "DRAW":
                 DrawMessage draw = (DrawMessage) message;
                 gui.drawLine(draw.getStartX(), draw.getStartY(), draw.getEndX(), draw.getEndY(), draw.getColor(),

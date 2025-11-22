@@ -8,9 +8,7 @@ import javafx.scene.Scene;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.*;
-import javafx.scene.layout.BorderPane;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.VBox;
+import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 
@@ -29,6 +27,7 @@ public class ClientGUI extends Application {
     private Client client;
     private TextArea chatArea;
     private ListView<String> playerList;
+    private ListView<String> roomListView;
     private Label wordLabel;
     private Label timerLabel;
     private Label drawerLabel;
@@ -38,31 +37,32 @@ public class ClientGUI extends Application {
 
     @Override
     public void start(Stage primaryStage) {
-        // Initial dialog for name and room
-        TextInputDialog nameDialog = new TextInputDialog("Player");
-        nameDialog.setTitle("Join Game");
-        nameDialog.setHeaderText("Enter your name and room");
-        nameDialog.setContentText("Name:");
-        nameDialog.showAndWait().ifPresent(name -> playerName = name);
+        // Connection Pane
+        Label ipLabel = new Label("Server IP:");
+        TextField ipField = new TextField("localhost");
+        Label portLabel = new Label("Port:");
+        TextField portField = new TextField("12345");
+        Button connectButton = new Button("Connect");
+        VBox connectionPane = new VBox(10, ipLabel, ipField, portLabel, portField, connectButton);
+        connectionPane.setAlignment(Pos.CENTER);
+        connectionPane.setPadding(new Insets(20));
 
-        TextInputDialog roomDialog = new TextInputDialog("Room1");
-        roomDialog.setTitle("Join Game");
-        roomDialog.setHeaderText("Enter room name");
-        roomDialog.setContentText("Room:");
-        roomDialog.showAndWait().ifPresent(room -> roomName = room);
+        // Room Pane
+        Label nameLabel = new Label("Your Name:");
+        TextField nameField = new TextField();
+        roomListView = new ListView<>();
+        Label roomListLabel = new Label("Available Rooms:");
+        Button refreshButton = new Button("Refresh");
+        Label createLabel = new Label("Create Room:");
+        TextField createRoomField = new TextField();
+        Button createButton = new Button("Create Room");
+        Button joinButton = new Button("Join Selected Room");
+        VBox roomPane = new VBox(10, nameLabel, nameField, roomListLabel, roomListView, refreshButton, createLabel,
+                createRoomField, createButton, joinButton);
+        roomPane.setAlignment(Pos.CENTER);
+        roomPane.setPadding(new Insets(20));
 
-        // Connect to server
-        client = new Client(this);
-        if (!client.connect("localhost", 12345)) {
-            // Show error and exit
-            Alert alert = new Alert(Alert.AlertType.ERROR,
-                    "Failed to connect to server. Make sure the server is running.");
-            alert.showAndWait();
-            System.exit(1);
-        }
-        client.sendMessage(new JoinMessage(playerName, roomName));
-
-        // GUI setup
+        // Game Pane (existing code, but moved here)
         canvas = new Canvas(800, 600);
         gc = canvas.getGraphicsContext2D();
         gc.setStroke(currentColor);
@@ -164,15 +164,65 @@ public class ClientGUI extends Application {
         rightPane.setCenter(chatBox);
         rightPane.setBottom(playerBox);
 
-        BorderPane root = new BorderPane();
-        root.setCenter(centerPane);
-        root.setRight(rightPane);
+        BorderPane gamePane = new BorderPane();
+        gamePane.setCenter(centerPane);
+        gamePane.setRight(rightPane);
 
-        Scene scene = new Scene(root, 1100, 700);
-
-        primaryStage.setTitle("Scribble Game - " + playerName);
+        // Scene and Stage
+        Scene scene = new Scene(connectionPane, 400, 300);
+        primaryStage.setTitle("Scribble Game");
         primaryStage.setScene(scene);
         primaryStage.show();
+
+        // Event Handlers
+        connectButton.setOnAction(e -> {
+            String ip = ipField.getText();
+            int port;
+            try {
+                port = Integer.parseInt(portField.getText());
+            } catch (NumberFormatException ex) {
+                Alert alert = new Alert(Alert.AlertType.ERROR, "Invalid port number.");
+                alert.showAndWait();
+                return;
+            }
+            client = new Client(this);
+            if (client.connect(ip, port)) {
+                scene.setRoot(roomPane);
+                primaryStage.setTitle("Scribble - Select Room");
+                client.sendMessage(new ListRoomsMessage());
+            } else {
+                Alert alert = new Alert(Alert.AlertType.ERROR, "Failed to connect to server.");
+                alert.showAndWait();
+            }
+        });
+
+        refreshButton.setOnAction(e -> client.sendMessage(new ListRoomsMessage()));
+
+        createButton.setOnAction(e -> {
+            playerName = nameField.getText().trim();
+            roomName = createRoomField.getText().trim();
+            if (playerName.isEmpty() || roomName.isEmpty()) {
+                Alert alert = new Alert(Alert.AlertType.ERROR, "Please enter name and room name.");
+                alert.showAndWait();
+                return;
+            }
+            client.sendMessage(new JoinMessage(playerName, roomName));
+            scene.setRoot(gamePane);
+            primaryStage.setTitle("Scribble Game - " + playerName);
+        });
+
+        joinButton.setOnAction(e -> {
+            playerName = nameField.getText().trim();
+            roomName = roomListView.getSelectionModel().getSelectedItem();
+            if (playerName.isEmpty() || roomName == null) {
+                Alert alert = new Alert(Alert.AlertType.ERROR, "Please enter name and select a room.");
+                alert.showAndWait();
+                return;
+            }
+            client.sendMessage(new JoinMessage(playerName, roomName));
+            scene.setRoot(gamePane);
+            primaryStage.setTitle("Scribble Game - " + playerName);
+        });
     }
 
     private Button createColorButton(String name, Color color) {
@@ -258,6 +308,13 @@ public class ClientGUI extends Application {
 
     public void clearCanvas() {
         Platform.runLater(() -> gc.clearRect(0, 0, canvas.getWidth(), canvas.getHeight()));
+    }
+
+    public void updateRoomList(List<String> rooms) {
+        Platform.runLater(() -> {
+            roomListView.getItems().clear();
+            roomListView.getItems().addAll(rooms);
+        });
     }
 
     public static void main(String[] args) {

@@ -7,8 +7,10 @@
 /Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/GameStateMessage.java
 /Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/GuessMessage.java
 /Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/JoinMessage.java
+/Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/ListRoomsMessage.java
 /Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/Main.java
 /Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/Message.java
 /Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/PlayerListMessage.java
 /Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/Room.java
+/Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/RoomListMessage.java
 /Users/jubayerahmedsojib/Documents/GitHub/scribble/scribble-game/src/main/java/com/scribble/Server.java
