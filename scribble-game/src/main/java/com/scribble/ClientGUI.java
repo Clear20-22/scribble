@@ -55,7 +55,8 @@ public class ClientGUI extends Application {
         client = new Client(this);
         if (!client.connect("localhost", 12345)) {
             // Show error and exit
-            Alert alert = new Alert(Alert.AlertType.ERROR, "Failed to connect to server. Make sure the server is running.");
+            Alert alert = new Alert(Alert.AlertType.ERROR,
+                    "Failed to connect to server. Make sure the server is running.");
             alert.showAndWait();
             System.exit(1);
         }
