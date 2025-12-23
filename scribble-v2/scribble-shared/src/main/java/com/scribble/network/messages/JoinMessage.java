@@ -8,10 +8,16 @@ public final class JoinMessage implements Message {
 
     private final String roomName;
     private final String playerName;
+    private final boolean spectator;
 
     public JoinMessage(String roomName, String playerName) {
+        this(roomName, playerName, false);
+    }
+
+    public JoinMessage(String roomName, String playerName, boolean spectator) {
         this.roomName = roomName;
         this.playerName = playerName;
+        this.spectator = spectator;
     }
 
     public String getRoomName() {
@@ -20,5 +26,9 @@ public final class JoinMessage implements Message {
 
     public String getPlayerName() {
         return playerName;
+    }
+
+    public boolean isSpectator() {
+        return spectator;
     }
 }

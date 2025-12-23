@@ -29,6 +29,25 @@ public class WordProvider {
         return words.get(random.nextInt(words.size()));
     }
 
+    public List<String> randomChoices(int count) {
+        List<String> choices = new ArrayList<>();
+        if (words.isEmpty()) {
+            return fallbackWords();
+        }
+        int attempts = 0;
+        while (choices.size() < count && attempts < words.size() * 2) {
+            String pick = words.get(random.nextInt(words.size()));
+            if (!choices.contains(pick)) {
+                choices.add(pick);
+            }
+            attempts++;
+        }
+        if (choices.isEmpty()) {
+            choices.addAll(fallbackWords());
+        }
+        return choices;
+    }
+
     private List<String> loadWords() {
         List<String> result = new ArrayList<>();
         try (InputStream stream = WordProvider.class.getResourceAsStream(Constants.WORDS_RESOURCE)) {

@@ -5,6 +5,8 @@ package com.scribble.network.messages;
  */
 public enum GamePhase {
     WAITING,
+    CHOOSING_WORD,
     RUNNING,
-    INTERMISSION
+    INTERMISSION,
+    FINISHED
 }

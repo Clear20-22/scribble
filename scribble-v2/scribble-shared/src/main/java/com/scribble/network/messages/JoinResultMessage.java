@@ -10,12 +10,14 @@ public final class JoinResultMessage implements Message {
     private final String reason;
     private final String roomName;
     private final String playerName;
+    private final boolean spectator;
 
-    public JoinResultMessage(boolean success, String reason, String roomName, String playerName) {
+    public JoinResultMessage(boolean success, String reason, String roomName, String playerName, boolean spectator) {
         this.success = success;
         this.reason = reason;
         this.roomName = roomName;
         this.playerName = playerName;
+        this.spectator = spectator;
     }
 
     public boolean isSuccess() {
@@ -32,5 +34,9 @@ public final class JoinResultMessage implements Message {
 
     public String getPlayerName() {
         return playerName;
+    }
+
+    public boolean isSpectator() {
+        return spectator;
     }
 }

@@ -7,12 +7,18 @@ public final class CreateRoomMessage implements Message {
     private static final long serialVersionUID = 1L;
 
     private final String roomName;
+    private final RoomSettings settings;
 
-    public CreateRoomMessage(String roomName) {
+    public CreateRoomMessage(String roomName, RoomSettings settings) {
         this.roomName = roomName;
+        this.settings = settings;
     }
 
     public String getRoomName() {
         return roomName;
+    }
+
+    public RoomSettings getSettings() {
+        return settings;
     }
 }

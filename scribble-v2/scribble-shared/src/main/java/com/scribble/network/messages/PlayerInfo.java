@@ -14,12 +14,14 @@ public final class PlayerInfo implements Serializable {
     private final int score;
     private final boolean drawer;
     private final boolean guessed;
+    private final boolean spectator;
 
-    public PlayerInfo(String name, int score, boolean drawer, boolean guessed) {
+    public PlayerInfo(String name, int score, boolean drawer, boolean guessed, boolean spectator) {
         this.name = name;
         this.score = score;
         this.drawer = drawer;
         this.guessed = guessed;
+        this.spectator = spectator;
     }
 
     public String getName() {
@@ -36,5 +38,9 @@ public final class PlayerInfo implements Serializable {
 
     public boolean hasGuessed() {
         return guessed;
+    }
+
+    public boolean isSpectator() {
+        return spectator;
     }
 }

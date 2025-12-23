@@ -163,9 +163,9 @@
 }
 
 .canvas-frame {
-    -fx-background-color: #ffffff;
+    -fx-background-color: rgba(255, 255, 255, 0.75);
     -fx-background-radius: 16;
-    -fx-border-color: #d9deea;
+    -fx-border-color: rgba(114, 133, 163, 0.35);
     -fx-border-radius: 16;
     -fx-padding: 12;
     -fx-effect: dropshadow(gaussian, rgba(31, 41, 55, 0.18), 18, 0.2, 0, 6);

@@ -15,6 +15,7 @@ public class SceneManager {
     private final Client client;
     private String playerName;
     private String roomName;
+    private boolean spectator;
 
     public SceneManager(Stage stage, Client client) {
         this.stage = stage;
@@ -61,8 +62,10 @@ public class SceneManager {
             controller.setClient(client);
             controller.setPlayerName(playerName);
             controller.setRoomName(roomName);
+            controller.setSpectator(spectator);
             setScene(root);
             client.setListener(controller);
+            controller.onShown();
         } catch (IOException e) {
             throw new RuntimeException("Failed to load Room.fxml", e);
         }
@@ -77,17 +80,26 @@ public class SceneManager {
 
     public void setPlayerName(String playerName) {
         this.playerName = playerName;
-        client.setIdentity(playerName, roomName);
+        client.setIdentity(playerName, roomName, spectator);
     }
 
     public void setRoomName(String roomName) {
         this.roomName = roomName;
-        client.setIdentity(playerName, roomName);
+        client.setIdentity(playerName, roomName, spectator);
     }
 
     public void clearRoom() {
         this.roomName = null;
-        client.setIdentity(playerName, null);
+        client.setIdentity(playerName, null, spectator);
+    }
+
+    public void setSpectator(boolean spectator) {
+        this.spectator = spectator;
+        client.setIdentity(playerName, roomName, spectator);
+    }
+
+    public boolean isSpectator() {
+        return spectator;
     }
 
     public String getPlayerName() {

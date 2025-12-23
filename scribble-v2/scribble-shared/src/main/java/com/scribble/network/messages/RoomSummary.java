@@ -12,14 +12,16 @@ public final class RoomSummary implements Serializable {
 
     private final String name;
     private final int playerCount;
-    private final boolean inGame;
+    private final GamePhase phase;
     private final int roundNumber;
+    private final RoomSettings settings;
 
-    public RoomSummary(String name, int playerCount, boolean inGame, int roundNumber) {
+    public RoomSummary(String name, int playerCount, GamePhase phase, int roundNumber, RoomSettings settings) {
         this.name = name;
         this.playerCount = playerCount;
-        this.inGame = inGame;
+        this.phase = phase;
         this.roundNumber = roundNumber;
+        this.settings = settings;
     }
 
     public String getName() {
@@ -30,11 +32,15 @@ public final class RoomSummary implements Serializable {
         return playerCount;
     }
 
-    public boolean isInGame() {
-        return inGame;
+    public GamePhase getPhase() {
+        return phase;
     }
 
     public int getRoundNumber() {
         return roundNumber;
+    }
+
+    public RoomSettings getSettings() {
+        return settings;
     }
 }

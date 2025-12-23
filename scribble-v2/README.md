@@ -44,9 +44,12 @@ In the login screen, enter username, host, and port. Use `localhost` and `5555` 
 
 ## Gameplay
 
-- Create or join rooms in the lobby.
-- The drawer can draw and clear; others can guess in chat.
-- Rounds start at 2+ players. Correct guesses award points.
+- Create rooms with settings (max players, round time, total rounds).
+- At round start, the drawer chooses 1 of 3 words within 10 seconds.
+- Guessers see masked words with timed hints; drawer sees the full word.
+- Correct guesses award points based on time remaining and guess order.
+- Drawer can undo/clear; drawings are synced to late-joiners.
+- Spectators can join full or in-progress rooms (chat-only, no scoring).
 - Clients attempt to reconnect automatically if the connection drops.
 
 ## Configuration
@@ -56,6 +59,12 @@ Key settings live in `scribble-v2/scribble-shared/src/main/java/com/scribble/uti
 - Port, round duration, scoring, rate limits
 - Word reveal timings
 - Ping/pong heartbeat + reconnect backoff
+
+## Troubleshooting
+
+- If the client UI looks unstyled, verify `scribble-client/src/main/resources/css/style.css` is present and the app is launched via Gradle.
+- If word choices or hints don't appear, ensure both server and client are rebuilt after protocol changes.
+- If you see connection timeouts, verify the server is running and the port matches the client login.
 
 ## Notes
 

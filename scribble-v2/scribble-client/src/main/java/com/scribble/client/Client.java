@@ -34,10 +34,12 @@ public class Client {
     private int lastPort;
     private String playerName;
     private String roomName;
+    private boolean spectator;
     private long lastPongAt;
     private long reconnectDelayMs = Constants.RECONNECT_INITIAL_DELAY_MS;
     private volatile boolean autoReconnect;
     private final AtomicBoolean heartbeatStarted = new AtomicBoolean(false);
+    private volatile long lastLatencyMs;
 
     public boolean connect(String host, int port) {
         if (connected.get()) {
@@ -69,9 +71,10 @@ public class Client {
         this.listener = listener;
     }
 
-    public void setIdentity(String playerName, String roomName) {
+    public void setIdentity(String playerName, String roomName, boolean spectator) {
         this.playerName = playerName;
         this.roomName = roomName;
+        this.spectator = spectator;
     }
 
     public void send(Message message) {
@@ -117,6 +120,12 @@ public class Client {
         }
         if (message instanceof PongMessage) {
             lastPongAt = System.currentTimeMillis();
+            lastLatencyMs = lastPongAt - ((PongMessage) message).getTimestamp();
+            Platform.runLater(() -> {
+                if (listener != null) {
+                    listener.onLatency(lastLatencyMs);
+                }
+            });
             return;
         }
         if (listener == null) {
@@ -131,6 +140,12 @@ public class Client {
                 listener.onPlayerList(playerList);
             } else if (message instanceof GameStateMessage state) {
                 listener.onGameState(state);
+            } else if (message instanceof WordChoicesMessage choices) {
+                listener.onWordChoices(choices);
+            } else if (message instanceof WordChosenMessage chosen) {
+                listener.onWordChosen(chosen);
+            } else if (message instanceof StrokeHistoryMessage history) {
+                listener.onStrokeHistory(history);
             } else if (message instanceof DrawMessage draw) {
                 listener.onDraw(draw);
             } else if (message instanceof ClearMessage clear) {
@@ -197,7 +212,7 @@ public class Client {
         if (success) {
             reconnecting.set(false);
             if (playerName != null && roomName != null) {
-                send(new JoinMessage(roomName, playerName));
+                send(new JoinMessage(roomName, playerName, spectator));
             }
             return;
         }

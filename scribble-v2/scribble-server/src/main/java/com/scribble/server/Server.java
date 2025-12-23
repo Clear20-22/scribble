@@ -82,9 +82,9 @@ public class Server {
         clients.remove(handler);
     }
 
-    public Room getOrCreateRoom(String name) {
+    public Room getOrCreateRoom(String name, com.scribble.network.messages.RoomSettings settings) {
         return rooms.computeIfAbsent(name, roomName -> {
-            Room room = new Room(roomName, this);
+            Room room = new Room(roomName, this, settings);
             broadcastRoomList();
             return room;
         });

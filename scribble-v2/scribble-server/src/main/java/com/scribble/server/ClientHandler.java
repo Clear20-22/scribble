@@ -26,6 +26,7 @@ public class ClientHandler implements Runnable {
     private final BlockingQueue<Message> outgoing;
     private final AtomicBoolean running;
     private Thread writerThread;
+    private int messagesSinceReset;
 
     private String playerName;
     private Room room;
@@ -63,6 +64,11 @@ public class ClientHandler implements Runnable {
                     synchronized (out) {
                         out.writeObject(message);
                         out.flush();
+                        messagesSinceReset++;
+                        if (messagesSinceReset >= 200) {
+                            out.reset();
+                            messagesSinceReset = 0;
+                        }
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -127,8 +133,16 @@ public class ClientHandler implements Runnable {
             handleCreateRoom(createRoom);
             return;
         }
+        if (message instanceof ChooseWordMessage chooseWord) {
+            handleChooseWord(chooseWord);
+            return;
+        }
         if (message instanceof JoinMessage joinMessage) {
             handleJoin(joinMessage);
+            return;
+        }
+        if (message instanceof RequestStrokeHistoryMessage) {
+            handleStrokeHistoryRequest();
             return;
         }
         if (message instanceof LeaveRoomMessage) {
@@ -141,6 +155,10 @@ public class ClientHandler implements Runnable {
         }
         if (message instanceof ClearMessage) {
             handleClear();
+            return;
+        }
+        if (message instanceof UndoMessage) {
+            handleUndo();
             return;
         }
         if (message instanceof GuessMessage guessMessage) {
@@ -159,36 +177,54 @@ public class ClientHandler implements Runnable {
             send(new ErrorMessage("ROOM_INVALID", result.getErrorMessage()));
             return;
         }
-        server.getOrCreateRoom(message.getRoomName().trim());
+        RoomSettings settings = sanitizeSettings(message.getSettings());
+        server.getOrCreateRoom(message.getRoomName().trim(), settings);
         server.broadcastRoomList();
     }
 
     private void handleJoin(JoinMessage message) {
         if (room != null) {
-            send(new JoinResultMessage(false, "Already in a room", room.getName(), playerName));
+            send(new JoinResultMessage(false, "Already in a room", room.getName(), playerName, false));
             return;
         }
         ValidationUtils.ValidationResult nameValidation = ValidationUtils.validatePlayerName(message.getPlayerName());
         if (!nameValidation.isValid()) {
-            send(new JoinResultMessage(false, nameValidation.getErrorMessage(), message.getRoomName(), message.getPlayerName()));
+            send(new JoinResultMessage(false, nameValidation.getErrorMessage(), message.getRoomName(), message.getPlayerName(), false));
             return;
         }
         ValidationUtils.ValidationResult roomValidation = ValidationUtils.validateRoomName(message.getRoomName());
         if (!roomValidation.isValid()) {
-            send(new JoinResultMessage(false, roomValidation.getErrorMessage(), message.getRoomName(), message.getPlayerName()));
+            send(new JoinResultMessage(false, roomValidation.getErrorMessage(), message.getRoomName(), message.getPlayerName(), false));
             return;
         }
-        Room targetRoom = server.getOrCreateRoom(message.getRoomName().trim());
+        Room targetRoom = server.getOrCreateRoom(message.getRoomName().trim(), null);
         String trimmedName = message.getPlayerName().trim();
-        if (!targetRoom.addPlayer(trimmedName, this)) {
-            send(new JoinResultMessage(false, "Name taken or room full", targetRoom.getName(), trimmedName));
+        if (!targetRoom.addPlayer(trimmedName, this, message.isSpectator())) {
+            send(new JoinResultMessage(false, "Name taken", targetRoom.getName(), trimmedName, false));
             return;
         }
         this.playerName = trimmedName;
         this.room = targetRoom;
-        send(new JoinResultMessage(true, "Joined", room.getName(), playerName));
+        boolean spectator = targetRoom.isSpectator(playerName);
+        send(new JoinResultMessage(true, spectator ? "Joined as spectator" : "Joined", room.getName(), playerName, spectator));
         logger.info("Player " + playerName + " joined room " + room.getName());
         server.broadcastRoomList();
+    }
+
+    private RoomSettings sanitizeSettings(RoomSettings settings) {
+        if (settings == null) {
+            return new RoomSettings(Constants.MAX_PLAYERS, Constants.ROUND_DURATION_SECONDS, Constants.DEFAULT_TOTAL_ROUNDS, false);
+        }
+        int maxPlayers = Math.max(Constants.MIN_PLAYERS, Math.min(Constants.MAX_PLAYERS, settings.getMaxPlayers()));
+        int roundTime = Math.max(30, Math.min(120, settings.getRoundTimeSeconds()));
+        int totalRounds = Math.max(1, Math.min(10, settings.getTotalRounds()));
+        return new RoomSettings(maxPlayers, roundTime, totalRounds, settings.isPrivateRoom());
+    }
+
+    private void handleChooseWord(ChooseWordMessage message) {
+        if (room != null) {
+            room.handleChooseWord(playerName, message.getWord());
+        }
     }
 
     private void handleDraw(DrawMessage drawMessage) {
@@ -205,6 +241,18 @@ public class ClientHandler implements Runnable {
     private void handleClear() {
         if (room != null) {
             room.handleClear(playerName);
+        }
+    }
+
+    private void handleUndo() {
+        if (room != null) {
+            room.handleUndo(playerName);
+        }
+    }
+
+    private void handleStrokeHistoryRequest() {
+        if (room != null) {
+            room.handleStrokeHistoryRequest(this);
         }
     }
 

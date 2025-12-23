@@ -46,18 +46,27 @@ public class RoomController implements ClientEventListener {
     @FXML
     private Label statusLabel;
     @FXML
+    private javafx.scene.control.ProgressIndicator chooseSpinner;
+    @FXML
     private Label connectionStatusLabel;
+    @FXML
+    private Label pingLabel;
+    @FXML
+    private Label roleLabel;
     @FXML
     private ListView<PlayerInfo> playerList;
     @FXML
     private ListView<ChatEntry> chatList;
     @FXML
     private TextField chatInput;
+    @FXML
+    private Button undoButton;
 
     private SceneManager sceneManager;
     private Client client;
     private String playerName;
     private String roomName;
+    private boolean spectator;
 
     private GraphicsContext gc;
     private String currentColor = "#1F1F1F";
@@ -69,6 +78,7 @@ public class RoomController implements ClientEventListener {
     private long lastSentAt;
     private String strokeId;
     private List<StrokePoint> pendingPoints;
+    private ChoiceDialog<String> wordChoiceDialog;
 
     public void setSceneManager(SceneManager sceneManager) {
         this.sceneManager = sceneManager;
@@ -84,6 +94,15 @@ public class RoomController implements ClientEventListener {
 
     public void setRoomName(String roomName) {
         this.roomName = roomName;
+    }
+
+    public void setSpectator(boolean spectator) {
+        this.spectator = spectator;
+    }
+
+    public void onShown() {
+        client.send(new RequestStrokeHistoryMessage());
+        updateRoleLabel();
     }
 
     @FXML
@@ -132,6 +151,10 @@ public class RoomController implements ClientEventListener {
                         handleClearShortcut();
                         event.consume();
                     }
+                    if (event.isControlDown() && event.getCode() == KeyCode.Z && isDrawer) {
+                        handleUndo();
+                        event.consume();
+                    }
                 });
             }
         });
@@ -142,6 +165,8 @@ public class RoomController implements ClientEventListener {
                 clearCanvas();
             }
         });
+
+        undoButton.setOnAction(e -> handleUndo());
 
         leaveButton.setOnAction(e -> {
             client.send(new LeaveRoomMessage());
@@ -172,7 +197,8 @@ public class RoomController implements ClientEventListener {
                     getStyleClass().removeAll("drawer-player", "guessed-player");
                 } else {
                     String guessed = item.hasGuessed() ? " ✓" : "";
-                    setText(item.getName() + "  " + item.getScore() + guessed);
+                    String spect = item.isSpectator() ? " (S)" : "";
+                    setText(item.getName() + spect + "  " + item.getScore() + guessed);
                     if (item.isDrawer()) {
                         if (!getStyleClass().contains("drawer-player")) {
                             getStyleClass().add("drawer-player");
@@ -262,6 +288,7 @@ public class RoomController implements ClientEventListener {
         eraserToggle.setDisable(!drawer);
         paletteBox.setDisable(!drawer);
         brushSlider.setDisable(!drawer);
+        undoButton.setDisable(!drawer);
     }
 
     private void handleClearShortcut() {
@@ -272,22 +299,35 @@ public class RoomController implements ClientEventListener {
         clearCanvas();
     }
 
+    private void handleUndo() {
+        if (!isDrawer) {
+            return;
+        }
+        client.send(new UndoMessage("LAST"));
+    }
+
+    private void updateRoleLabel() {
+        roleLabel.setText(spectator ? "Spectator" : "Player");
+    }
+
     @Override
     public void onGameState(GameStateMessage message) {
-        if (message.getPhase() == GamePhase.RUNNING && message.getTimeLeft() == Constants.ROUND_DURATION_SECONDS) {
-            clearCanvas();
-        }
         wordLabel.setText("Word: " + message.getWord());
         timerLabel.setText("Time: " + message.getTimeLeft());
         roundLabel.setText("Round: " + message.getRoundNumber());
         drawerLabel.setText(message.isDrawer() ? "You are drawing" : "Drawer: " + message.getCurrentDrawer());
         String phaseText = switch (message.getPhase()) {
             case WAITING -> "WAITING";
+            case CHOOSING_WORD -> "CHOOSING";
             case RUNNING -> "DRAWING";
             case INTERMISSION -> "ROUND END";
+            case FINISHED -> "MATCH END";
         };
         statusLabel.setText(phaseText);
-        updateDrawerState(message.isDrawer());
+        boolean showSpinner = message.getPhase() == GamePhase.CHOOSING_WORD && !message.isDrawer();
+        chooseSpinner.setVisible(showSpinner);
+        chooseSpinner.setManaged(showSpinner);
+        updateDrawerState(message.isDrawer() && !spectator);
     }
 
     @Override
@@ -312,6 +352,56 @@ public class RoomController implements ClientEventListener {
     @Override
     public void onClear(ClearMessage message) {
         clearCanvas();
+    }
+
+    @Override
+    public void onStrokeHistory(StrokeHistoryMessage message) {
+        clearCanvas();
+        for (DrawMessage draw : message.getStrokes()) {
+            onDraw(draw);
+        }
+    }
+
+    @Override
+    public void onWordChoices(WordChoicesMessage message) {
+        if (spectator) {
+            return;
+        }
+        if (wordChoiceDialog != null) {
+            wordChoiceDialog.close();
+        }
+        ChoiceDialog<String> dialog = new ChoiceDialog<>(message.getChoices().get(0), message.getChoices());
+        dialog.setTitle("Choose a word");
+        dialog.setHeaderText("Pick a word (" + message.getSecondsToChoose() + "s)");
+        dialog.setContentText("Word:");
+        dialog.resultProperty().addListener((obs, oldVal, newVal) -> {
+            if (newVal != null) {
+                client.send(new ChooseWordMessage(newVal));
+            }
+        });
+        wordChoiceDialog = dialog;
+        dialog.show();
+    }
+
+    @Override
+    public void onWordChosen(WordChosenMessage message) {
+        wordLabel.setText("Word: " + message.getWord());
+        clearCanvas();
+        if (wordChoiceDialog != null) {
+            wordChoiceDialog.close();
+            wordChoiceDialog = null;
+        }
+    }
+
+    @Override
+    public void onJoinResult(JoinResultMessage message) {
+        if (!message.isSuccess()) {
+            statusLabel.setText(message.getReason());
+            return;
+        }
+        spectator = message.isSpectator();
+        updateRoleLabel();
+        client.send(new RequestStrokeHistoryMessage());
     }
 
     @Override
@@ -347,5 +437,10 @@ public class RoomController implements ClientEventListener {
             case RECONNECTING -> connectionStatusLabel.getStyleClass().add("status-reconnecting");
             case DISCONNECTED -> connectionStatusLabel.getStyleClass().add("status-disconnected");
         }
+    }
+
+    @Override
+    public void onLatency(long latencyMs) {
+        pingLabel.setText(latencyMs + " ms");
     }
 }
