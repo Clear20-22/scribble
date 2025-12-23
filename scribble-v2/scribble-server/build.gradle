@@ -1,0 +1,11 @@
+plugins {
+    id 'application'
+}
+
+dependencies {
+    implementation project(':scribble-shared')
+}
+
+application {
+    mainClass = 'com.scribble.server.ServerMain'
+}

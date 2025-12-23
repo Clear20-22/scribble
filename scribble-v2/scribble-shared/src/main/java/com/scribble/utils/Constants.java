@@ -1,0 +1,45 @@
+package com.scribble.utils;
+
+public final class Constants {
+    private Constants() {
+        throw new AssertionError("No instances");
+    }
+
+    public static final int DEFAULT_PORT = 5555;
+    public static final String DEFAULT_HOST = "localhost";
+
+    public static final int MIN_PLAYERS = 2;
+    public static final int MAX_PLAYERS = 12;
+    public static final int ROUND_DURATION_SECONDS = 60;
+    public static final int INTERMISSION_SECONDS = 3;
+
+    public static final int GUESS_BASE_POINTS = 100;
+    public static final int GUESS_TIME_MULTIPLIER = 5;
+    public static final int DRAWER_BONUS_PER_GUESS = 50;
+
+    public static final int CHAT_MAX_LENGTH = 200;
+    public static final int NAME_MIN_LENGTH = 3;
+    public static final int NAME_MAX_LENGTH = 16;
+    public static final String NAME_PATTERN = "^[a-zA-Z0-9_]+$";
+
+    public static final int ROOM_NAME_MIN_LENGTH = 2;
+    public static final int ROOM_NAME_MAX_LENGTH = 20;
+    public static final String ROOM_NAME_PATTERN = "^[a-zA-Z0-9_-]+$";
+
+    public static final int DRAW_RATE_LIMIT_MS = 20;
+    public static final int DRAW_BATCH_INTERVAL_MS = 30;
+    public static final int DRAW_BATCH_SIZE = 6;
+    public static final int CHAT_RATE_LIMIT_MS = 400;
+    public static final int GUESS_RATE_LIMIT_MS = 300;
+
+    public static final int PING_INTERVAL_SECONDS = 10;
+    public static final int PING_TIMEOUT_SECONDS = 25;
+
+    public static final String WORDS_RESOURCE = "/words.txt";
+
+    public static final int REVEAL_START_SECONDS = 10;
+    public static final int REVEAL_EVERY_SECONDS = 2;
+
+    public static final int RECONNECT_INITIAL_DELAY_MS = 1000;
+    public static final int RECONNECT_MAX_DELAY_MS = 8000;
+}
