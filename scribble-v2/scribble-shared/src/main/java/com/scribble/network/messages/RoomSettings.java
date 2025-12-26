@@ -11,12 +11,24 @@ public final class RoomSettings implements Serializable {
     private final int roundTimeSeconds;
     private final int totalRounds;
     private final boolean privateRoom;
+    private final String roomCode;
+    private final boolean allowSpectators;
+    private final int wordChoiceSeconds;
+    private final HintMode hintMode;
+    private final WordDifficulty wordDifficulty;
 
-    public RoomSettings(int maxPlayers, int roundTimeSeconds, int totalRounds, boolean privateRoom) {
+    public RoomSettings(int maxPlayers, int roundTimeSeconds, int totalRounds, boolean privateRoom,
+                        String roomCode, boolean allowSpectators, int wordChoiceSeconds,
+                        HintMode hintMode, WordDifficulty wordDifficulty) {
         this.maxPlayers = maxPlayers;
         this.roundTimeSeconds = roundTimeSeconds;
         this.totalRounds = totalRounds;
         this.privateRoom = privateRoom;
+        this.roomCode = roomCode;
+        this.allowSpectators = allowSpectators;
+        this.wordChoiceSeconds = wordChoiceSeconds;
+        this.hintMode = hintMode;
+        this.wordDifficulty = wordDifficulty;
     }
 
     public int getMaxPlayers() {
@@ -33,5 +45,25 @@ public final class RoomSettings implements Serializable {
 
     public boolean isPrivateRoom() {
         return privateRoom;
+    }
+
+    public String getRoomCode() {
+        return roomCode;
+    }
+
+    public boolean isAllowSpectators() {
+        return allowSpectators;
+    }
+
+    public int getWordChoiceSeconds() {
+        return wordChoiceSeconds;
+    }
+
+    public HintMode getHintMode() {
+        return hintMode;
+    }
+
+    public WordDifficulty getWordDifficulty() {
+        return wordDifficulty;
     }
 }

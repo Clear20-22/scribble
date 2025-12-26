@@ -53,8 +53,31 @@
             <padding>
                 <Insets top="8" right="16" bottom="16" left="8" />
             </padding>
-            <StackPane styleClass="canvas-frame">
+            <StackPane fx:id="canvasFrame" styleClass="canvas-frame" VBox.vgrow="ALWAYS">
                 <Canvas fx:id="drawCanvas" width="740" height="520" styleClass="canvas-board" />
+                <Label fx:id="choosingHintLabel" text="Drawer is choosing a word..." visible="false" managed="false"
+                       styleClass="choosing-hint" />
+                <VBox fx:id="wordChoiceOverlay" visible="false" managed="false" alignment="CENTER" spacing="12"
+                      styleClass="choice-overlay">
+                    <VBox spacing="6" alignment="CENTER" styleClass="choice-card">
+                        <Label fx:id="wordChoiceTitle" text="Choose a word" styleClass="choice-title" />
+                        <Label fx:id="wordChoiceTimer" text="Time left: 10s" styleClass="choice-subtitle" />
+                        <HBox fx:id="wordChoiceButtons" spacing="10" alignment="CENTER" />
+                    </VBox>
+                </VBox>
+                <VBox fx:id="leaderboardOverlay" visible="false" managed="false" alignment="CENTER" spacing="12"
+                      styleClass="leaderboard-overlay">
+                    <VBox spacing="10" alignment="CENTER" styleClass="leaderboard-card">
+                        <Label fx:id="leaderboardTitle" text="Leaderboard" styleClass="leaderboard-title" />
+                        <VBox fx:id="leaderboardRows" spacing="8" />
+                        <Label fx:id="leaderboardVoteLabel" text="Waiting for votes..." styleClass="leaderboard-vote" />
+                        <HBox spacing="10" alignment="CENTER">
+                            <Button fx:id="playAgainButton" text="Play Again" styleClass="primary-button" />
+                            <Button fx:id="returnLobbyButton" text="Return to Lobby" styleClass="secondary-button" />
+                            <Button fx:id="leaveRoomButton" text="Leave Room" styleClass="danger-button" />
+                        </HBox>
+                    </VBox>
+                </VBox>
             </StackPane>
             <HBox spacing="12" alignment="CENTER_LEFT">
                 <HBox fx:id="paletteBox" spacing="6" />

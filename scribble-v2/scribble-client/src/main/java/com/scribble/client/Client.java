@@ -154,6 +154,10 @@ public class Client {
                 listener.onChat(chat);
             } else if (message instanceof ErrorMessage error) {
                 listener.onError(error);
+            } else if (message instanceof GuessHintMessage hint) {
+                listener.onGuessHint(hint);
+            } else if (message instanceof PlayAgainStatusMessage status) {
+                listener.onPlayAgainStatus(status);
             }
         });
     }

@@ -40,6 +40,7 @@ public class Room {
     private final WordProvider wordProvider;
     private final ScheduledExecutorService scheduler;
     private final Object lock = new Object();
+    private final Map<String, Boolean> playAgainVotes;
 
     private String currentDrawer;
     private String lastDrawer;
@@ -50,12 +51,14 @@ public class Room {
     private GamePhase phase;
     private ScheduledFuture<?> tickTask;
     private ScheduledFuture<?> chooseTask;
+    private boolean playAgainOpen;
 
     public Room(String name, Server server, RoomSettings settings) {
         this.name = name;
         this.server = server;
         this.settings = settings == null
-                ? new RoomSettings(Constants.MAX_PLAYERS, Constants.ROUND_DURATION_SECONDS, Constants.DEFAULT_TOTAL_ROUNDS, false)
+                ? new RoomSettings(Constants.MAX_PLAYERS, Constants.ROUND_DURATION_SECONDS, Constants.DEFAULT_TOTAL_ROUNDS,
+                false, null, true, Constants.CHOOSE_WORD_SECONDS, HintMode.NORMAL, WordDifficulty.MEDIUM)
                 : settings;
         this.players = new ConcurrentHashMap<>();
         this.spectators = new HashSet<>();
@@ -69,9 +72,11 @@ public class Room {
         this.random = new Random();
         this.wordProvider = new WordProvider();
         this.scheduler = Executors.newSingleThreadScheduledExecutor();
+        this.playAgainVotes = new HashMap<>();
         this.phase = GamePhase.WAITING;
         this.roundNumber = 0;
         this.timeLeft = settings != null ? settings.getRoundTimeSeconds() : Constants.ROUND_DURATION_SECONDS;
+        this.playAgainOpen = false;
     }
 
     public String getName() {
@@ -98,15 +103,18 @@ public class Room {
         return spectators.contains(playerName);
     }
 
-    public boolean addPlayer(String playerName, ClientHandler handler, boolean spectatorRequested) {
+    public String addPlayer(String playerName, ClientHandler handler, boolean spectatorRequested) {
         synchronized (lock) {
             if (players.containsKey(playerName)) {
-                return false;
+                return "Name taken";
             }
             boolean forceSpectator = getActivePlayersCount() >= settings.getMaxPlayers()
                     || phase == GamePhase.RUNNING
                     || phase == GamePhase.CHOOSING_WORD;
             boolean spectator = spectatorRequested || forceSpectator;
+            if (spectator && !settings.isAllowSpectators()) {
+                return "Spectators are disabled";
+            }
             players.put(playerName, handler);
             scores.putIfAbsent(playerName, 0);
             if (spectator) {
@@ -116,7 +124,7 @@ public class Room {
             broadcastPlayerListLocked();
             sendStrokeHistory(handler);
             startIfReadyLocked();
-            return true;
+            return null;
         }
     }
 
@@ -125,6 +133,7 @@ public class Room {
             players.remove(playerName);
             scores.remove(playerName);
             spectators.remove(playerName);
+            playAgainVotes.remove(playerName);
             playersWhoGuessed.remove(playerName);
             broadcastSystem(playerName + " left the room");
             broadcastPlayerListLocked();
@@ -140,6 +149,9 @@ public class Room {
             }
 
             if (getActivePlayersCount() < Constants.MIN_PLAYERS && phase != GamePhase.WAITING) {
+                resetToWaitingLocked();
+            }
+            if (phase == GamePhase.FINISHED && getActivePlayersCount() < Constants.MIN_PLAYERS) {
                 resetToWaitingLocked();
             }
         }
@@ -194,36 +206,12 @@ public class Room {
         if (sender == null || text == null) {
             return;
         }
-        ValidationUtils.ValidationResult result = ValidationUtils.validateChatMessage(text);
+        String sanitized = sanitizeText(text);
+        ValidationUtils.ValidationResult result = ValidationUtils.validateChatMessage(sanitized);
         if (!result.isValid()) {
             return;
         }
-        synchronized (lock) {
-            if (spectators.contains(sender)) {
-                broadcast(new ChatMessage(sender, text, ChatType.CHAT));
-                return;
-            }
-            if (phase == GamePhase.RUNNING && !sender.equals(currentDrawer) && currentWord != null
-                    && !playersWhoGuessed.contains(sender)
-                    && normalize(text).equals(normalize(currentWord))) {
-                playersWhoGuessed.add(sender);
-                int guessOrder = roundGuessOrder.size();
-                int points = Scoring.guessPoints(timeLeft, settings.getRoundTimeSeconds(), guessOrder);
-                scores.put(sender, scores.getOrDefault(sender, 0) + points);
-                roundGuessPoints.put(sender, points);
-                roundGuessOrder.add(sender);
-                broadcast(new ChatMessage(sender, "guessed the word!", ChatType.CORRECT));
-                broadcastPlayerListLocked();
-
-                if (allNonDrawerGuessed()) {
-                    startIntermissionLocked();
-                } else {
-                    broadcastGameStateLocked();
-                }
-                return;
-            }
-        }
-        broadcast(new ChatMessage(sender, text, ChatType.CHAT));
+        broadcast(new ChatMessage(sender, sanitized, ChatType.CHAT));
     }
 
     public void handleChooseWord(String sender, String word) {
@@ -252,6 +240,91 @@ public class Room {
         sendStrokeHistory(handler);
     }
 
+    public void handlePlayAgainRequest(String sender, boolean playAgain) {
+        if (sender == null) {
+            return;
+        }
+        synchronized (lock) {
+            if (phase != GamePhase.FINISHED || !playAgainOpen || spectators.contains(sender)) {
+                return;
+            }
+            if (playAgain) {
+                playAgainVotes.put(sender, true);
+            } else {
+                playAgainVotes.remove(sender);
+            }
+            broadcastPlayAgainStatusLocked();
+            int requiredVotes = getRequiredVotesLocked();
+            if (countPlayAgainVotesLocked() >= requiredVotes) {
+                startNewMatchLocked();
+            }
+        }
+    }
+
+    public void sendFullState(ClientHandler handler, String playerName) {
+        if (handler == null || playerName == null) {
+            return;
+        }
+        synchronized (lock) {
+            handler.send(buildPlayerListMessageLocked());
+            handler.send(buildGameStateMessageLocked(playerName));
+            if (phase == GamePhase.CHOOSING_WORD && playerName.equals(currentDrawer) && currentChoices != null) {
+                handler.send(new WordChoicesMessage(currentChoices, timeLeft));
+            }
+            if (phase == GamePhase.FINISHED && playAgainOpen) {
+                handler.send(buildPlayAgainStatusMessageLocked());
+            }
+            sendStrokeHistory(handler);
+        }
+    }
+
+    public void handleGuess(String sender, String text) {
+        if (sender == null || text == null) {
+            return;
+        }
+        String sanitized = sanitizeText(text);
+        ValidationUtils.ValidationResult result = ValidationUtils.validateChatMessage(sanitized);
+        if (!result.isValid()) {
+            return;
+        }
+        synchronized (lock) {
+            if (spectators.contains(sender) || sender.equals(currentDrawer)) {
+                broadcast(new ChatMessage(sender, sanitized, ChatType.CHAT));
+                return;
+            }
+            if (phase == GamePhase.RUNNING && currentWord != null
+                    && !playersWhoGuessed.contains(sender)
+                    && normalize(sanitized).equals(normalize(currentWord))) {
+                playersWhoGuessed.add(sender);
+                int guessOrder = roundGuessOrder.size();
+                int points = Scoring.guessPoints(timeLeft, settings.getRoundTimeSeconds(), guessOrder);
+                scores.put(sender, scores.getOrDefault(sender, 0) + points);
+                roundGuessPoints.put(sender, points);
+                roundGuessOrder.add(sender);
+                broadcast(new ChatMessage(sender, "guessed the word!", ChatType.CORRECT));
+                broadcastPlayerListLocked();
+
+                if (allNonDrawerGuessed()) {
+                    startIntermissionLocked();
+                } else {
+                    broadcastGameStateLocked();
+                }
+                return;
+            }
+        }
+        if (phase == GamePhase.RUNNING && currentWord != null
+                && !playersWhoGuessed.contains(sender)
+                && !spectators.contains(sender)
+                && !sender.equals(currentDrawer)
+                && isCloseGuess(sanitized, currentWord)) {
+            ClientHandler handler = players.get(sender);
+            if (handler != null) {
+                handler.send(new GuessHintMessage("Close!"));
+            }
+        }
+        broadcast(new ChatMessage(sender, sanitized, ChatType.CHAT));
+    }
+
     private void startIfReadyLocked() {
         if (getActivePlayersCount() >= Constants.MIN_PLAYERS && phase == GamePhase.WAITING) {
             startRoundLocked();
@@ -272,7 +345,7 @@ public class Room {
         resetRoundState();
         currentDrawer = selectDrawer();
         currentChoices = wordProvider.randomChoices(3);
-        timeLeft = Constants.CHOOSE_WORD_SECONDS;
+        timeLeft = settings.getWordChoiceSeconds();
         logger.info("Round " + roundNumber + " choosing word in room " + name + ", drawer=" + currentDrawer);
         sendWordChoicesLocked();
         broadcastPlayerListLocked();
@@ -330,16 +403,12 @@ public class Room {
 
     private void finishMatchLocked() {
         phase = GamePhase.FINISHED;
-        broadcastSystem("Match finished! Resetting scores.");
+        playAgainOpen = true;
+        playAgainVotes.clear();
+        broadcastSystem("Match finished! Vote to play again.");
         broadcastGameStateLocked();
-        scores.replaceAll((key, value) -> 0);
-        roundNumber = 0;
-        scheduler.schedule(() -> {
-            synchronized (lock) {
-                resetToWaitingLocked();
-                startIfReadyLocked();
-            }
-        }, Constants.INTERMISSION_SECONDS, TimeUnit.SECONDS);
+        broadcastPlayerListLocked();
+        broadcastPlayAgainStatusLocked();
     }
 
     private void tick() {
@@ -358,12 +427,21 @@ public class Room {
     }
 
     private void maybeRevealHints() {
+        if (settings.getHintMode() == HintMode.OFF) {
+            return;
+        }
         int total = settings.getRoundTimeSeconds();
         if (total <= 0 || currentWord == null) {
             return;
         }
         int firstReveal = total * Constants.HINT_FIRST_REVEAL_PERCENT / 100;
         int secondReveal = total * Constants.HINT_SECOND_REVEAL_PERCENT / 100;
+        if (settings.getHintMode() == HintMode.LIGHT) {
+            if (timeLeft == firstReveal) {
+                revealRandomLetter();
+            }
+            return;
+        }
         if (timeLeft == firstReveal || timeLeft == secondReveal) {
             revealRandomLetter();
         }
@@ -415,6 +493,15 @@ public class Room {
         revealedIndices.clear();
     }
 
+    private void startNewMatchLocked() {
+        playAgainOpen = false;
+        playAgainVotes.clear();
+        scores.replaceAll((key, value) -> 0);
+        roundNumber = 0;
+        resetToWaitingLocked();
+        startIfReadyLocked();
+    }
+
     private void resetToWaitingLocked() {
         stopTimersLocked();
         phase = GamePhase.WAITING;
@@ -444,33 +531,14 @@ public class Room {
     }
 
     private void broadcastPlayerListLocked() {
-        List<PlayerInfo> list = new ArrayList<>();
-        for (Map.Entry<String, ClientHandler> entry : players.entrySet()) {
-            String name = entry.getKey();
-            boolean guessed = playersWhoGuessed.contains(name);
-            boolean spectator = spectators.contains(name);
-            list.add(new PlayerInfo(name, scores.getOrDefault(name, 0), name.equals(currentDrawer), guessed, spectator));
-        }
-        list.sort((a, b) -> Integer.compare(b.getScore(), a.getScore()));
-        broadcast(new PlayerListMessage(list));
+        broadcast(buildPlayerListMessageLocked());
     }
 
     private void broadcastGameStateLocked() {
         for (String player : players.keySet()) {
-            boolean isDrawer = player.equals(currentDrawer);
-            String word;
-            if (phase == GamePhase.WAITING) {
-                word = "Waiting for players";
-            } else if (phase == GamePhase.CHOOSING_WORD) {
-                word = isDrawer ? "Pick a word" : "Choosing a word...";
-            } else if (phase == GamePhase.INTERMISSION || phase == GamePhase.FINISHED) {
-                word = currentWord == null ? "" : currentWord;
-            } else {
-                word = isDrawer ? currentWord : maskedWord();
-            }
             ClientHandler handler = players.get(player);
             if (handler != null) {
-                handler.send(new GameStateMessage(currentDrawer, word, timeLeft, roundNumber, phase, isDrawer));
+                handler.send(buildGameStateMessageLocked(player));
             }
         }
     }
@@ -481,7 +549,7 @@ public class Room {
         }
         ClientHandler handler = players.get(currentDrawer);
         if (handler != null) {
-            handler.send(new WordChoicesMessage(currentChoices, Constants.CHOOSE_WORD_SECONDS));
+            handler.send(new WordChoicesMessage(currentChoices, settings.getWordChoiceSeconds()));
         }
     }
 
@@ -496,6 +564,10 @@ public class Room {
     private void broadcastStrokeHistoryLocked() {
         List<DrawMessage> strokes = flattenStrokes();
         broadcast(new StrokeHistoryMessage(strokes));
+    }
+
+    private void broadcastPlayAgainStatusLocked() {
+        broadcast(buildPlayAgainStatusMessageLocked());
     }
 
     private List<DrawMessage> flattenStrokes() {
@@ -561,6 +633,90 @@ public class Room {
 
     private String normalize(String text) {
         return text.trim().toLowerCase().replaceAll("[^a-z0-9]", "");
+    }
+
+    private int countPlayAgainVotesLocked() {
+        int count = 0;
+        for (Boolean vote : playAgainVotes.values()) {
+            if (Boolean.TRUE.equals(vote)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int getRequiredVotesLocked() {
+        int eligible = getActivePlayersCount();
+        return (eligible / 2) + 1;
+    }
+
+    private PlayerListMessage buildPlayerListMessageLocked() {
+        List<PlayerInfo> list = new ArrayList<>();
+        for (Map.Entry<String, ClientHandler> entry : players.entrySet()) {
+            String name = entry.getKey();
+            boolean guessed = playersWhoGuessed.contains(name);
+            boolean spectator = spectators.contains(name);
+            list.add(new PlayerInfo(name, scores.getOrDefault(name, 0), name.equals(currentDrawer), guessed, spectator));
+        }
+        list.sort((a, b) -> Integer.compare(b.getScore(), a.getScore()));
+        return new PlayerListMessage(list);
+    }
+
+    private GameStateMessage buildGameStateMessageLocked(String player) {
+        boolean isDrawer = player.equals(currentDrawer);
+        String word;
+        if (phase == GamePhase.WAITING) {
+            word = "Waiting for players";
+        } else if (phase == GamePhase.CHOOSING_WORD) {
+            word = isDrawer ? "Pick a word" : "Choosing a word...";
+        } else if (phase == GamePhase.INTERMISSION || phase == GamePhase.FINISHED) {
+            word = currentWord == null ? "" : currentWord;
+        } else {
+            word = isDrawer ? currentWord : maskedWord();
+        }
+        return new GameStateMessage(currentDrawer, word, timeLeft, roundNumber, phase, isDrawer);
+    }
+
+    private PlayAgainStatusMessage buildPlayAgainStatusMessageLocked() {
+        int eligible = getActivePlayersCount();
+        int required = getRequiredVotesLocked();
+        int yesVotes = countPlayAgainVotesLocked();
+        return new PlayAgainStatusMessage(yesVotes, eligible, required);
+    }
+
+    private String sanitizeText(String text) {
+        String cleaned = text.replaceAll("\\p{Cntrl}", "");
+        cleaned = cleaned.replaceAll("\\s+", " ").trim();
+        return cleaned;
+    }
+
+    private boolean isCloseGuess(String guess, String answer) {
+        String a = normalize(guess);
+        String b = normalize(answer);
+        if (a.isEmpty() || b.isEmpty()) {
+            return false;
+        }
+        int maxDistance = Math.max(1, b.length() / 5);
+        return editDistance(a, b) <= maxDistance;
+    }
+
+    private int editDistance(String a, String b) {
+        int[] prev = new int[b.length() + 1];
+        int[] curr = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) {
+            prev[j] = j;
+        }
+        for (int i = 1; i <= a.length(); i++) {
+            curr[0] = i;
+            for (int j = 1; j <= b.length(); j++) {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                curr[j] = Math.min(Math.min(curr[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+            }
+            int[] swap = prev;
+            prev = curr;
+            curr = swap;
+        }
+        return prev[b.length()];
     }
 
     private void awardDrawerBonusLocked() {

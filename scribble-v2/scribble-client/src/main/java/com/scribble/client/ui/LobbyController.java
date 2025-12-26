@@ -8,6 +8,8 @@ import com.scribble.network.messages.*;
 import com.scribble.utils.Constants;
 import com.scribble.utils.ValidationUtils;
 import javafx.animation.KeyFrame;
+import javafx.animation.FadeTransition;
+import javafx.animation.ScaleTransition;
 import javafx.animation.Timeline;
 import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.collections.FXCollections;
@@ -16,7 +18,8 @@ import javafx.collections.transformation.FilteredList;
 import javafx.fxml.FXML;
 import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
-import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.VBox;
 import javafx.util.Duration;
 
 public class LobbyController implements ClientEventListener {
@@ -48,11 +51,47 @@ public class LobbyController implements ClientEventListener {
     private TextField searchField;
     @FXML
     private CheckBox hideFullCheck;
+    @FXML
+    private VBox createOverlay;
+    @FXML
+    private VBox createCard;
+    @FXML
+    private TextField roomNameField;
+    @FXML
+    private Label roomNameError;
+    @FXML
+    private Spinner<Integer> maxPlayersSpinner;
+    @FXML
+    private Spinner<Integer> roundCountSpinner;
+    @FXML
+    private Spinner<Integer> roundTimeSpinner;
+    @FXML
+    private Spinner<Integer> wordChoiceSpinner;
+    @FXML
+    private ComboBox<WordDifficulty> difficultyBox;
+    @FXML
+    private HBox hintToggleBox;
+    @FXML
+    private HBox privacyToggleBox;
+    @FXML
+    private TextField roomCodeField;
+    @FXML
+    private CheckBox allowSpectatorsCheck;
+    @FXML
+    private Label createErrorLabel;
+    @FXML
+    private Button createConfirmButton;
+    @FXML
+    private Button createCancelButton;
 
     private SceneManager sceneManager;
     private Client client;
     private String playerName;
     private Timeline refreshTimeline;
+    private FadeTransition createFade;
+    private ScaleTransition createScale;
+    private ToggleGroup hintGroup;
+    private ToggleGroup privacyGroup;
     private final ObservableList<RoomSummary> roomData = FXCollections.observableArrayList();
     private final FilteredList<RoomSummary> filteredRooms = new FilteredList<>(roomData);
 
@@ -84,7 +123,9 @@ public class LobbyController implements ClientEventListener {
             if (settings == null) {
                 return new ReadOnlyStringWrapper("-");
             }
-            return new ReadOnlyStringWrapper(settings.getRoundTimeSeconds() + "s / " + settings.getTotalRounds() + "r");
+            return new ReadOnlyStringWrapper(settings.getRoundTimeSeconds() + "s / "
+                    + settings.getTotalRounds() + "r / "
+                    + settings.getWordChoiceSeconds() + "s pick");
         });
         joinColumn.setCellFactory(col -> new TableCell<>() {
             private final Button joinButton = new Button("Join");
@@ -117,6 +158,8 @@ public class LobbyController implements ClientEventListener {
         roomTable.setItems(filteredRooms);
         searchField.textProperty().addListener((obs, oldVal, newVal) -> applyFilters());
         hideFullCheck.selectedProperty().addListener((obs, oldVal, newVal) -> applyFilters());
+
+        setupCreateForm();
     }
 
     public void onShown() {
@@ -137,48 +180,7 @@ public class LobbyController implements ClientEventListener {
 
     @FXML
     private void onCreateRoom() {
-        Dialog<RoomSettings> dialog = new Dialog<>();
-        dialog.setTitle("Create Room");
-        dialog.setHeaderText("Room settings");
-
-        TextField nameField = new TextField();
-        nameField.setPromptText("Room name");
-
-        Spinner<Integer> maxPlayers = new Spinner<>(2, Constants.MAX_PLAYERS, Constants.MAX_PLAYERS);
-        Spinner<Integer> roundTime = new Spinner<>(30, 120, Constants.ROUND_DURATION_SECONDS);
-        Spinner<Integer> totalRounds = new Spinner<>(1, 10, Constants.DEFAULT_TOTAL_ROUNDS);
-        CheckBox privateRoom = new CheckBox("Private room");
-
-        GridPane grid = new GridPane();
-        grid.setHgap(10);
-        grid.setVgap(10);
-        grid.addRow(0, new Label("Name"), nameField);
-        grid.addRow(1, new Label("Max players"), maxPlayers);
-        grid.addRow(2, new Label("Round time (s)"), roundTime);
-        grid.addRow(3, new Label("Total rounds"), totalRounds);
-        grid.addRow(4, new Label(""), privateRoom);
-
-        dialog.getDialogPane().setContent(grid);
-        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
-
-        dialog.setResultConverter(btn -> {
-            if (btn == ButtonType.OK) {
-                String name = nameField.getText();
-                ValidationUtils.ValidationResult result = ValidationUtils.validateRoomName(name);
-                if (!result.isValid()) {
-                    showError(result.getErrorMessage());
-                    return null;
-                }
-                return new RoomSettings(maxPlayers.getValue(), roundTime.getValue(), totalRounds.getValue(), privateRoom.isSelected());
-            }
-            return null;
-        });
-
-        dialog.showAndWait().ifPresent(settings -> {
-            String name = nameField.getText().trim();
-            client.send(new CreateRoomMessage(name, settings));
-            joinRoom(new RoomSummary(name, 0, GamePhase.WAITING, 0, settings), false);
-        });
+        openCreateOverlay();
     }
 
     private void joinRoom(RoomSummary summary, boolean spectator) {
@@ -210,6 +212,138 @@ public class LobbyController implements ClientEventListener {
     private void showError(String message) {
         statusLabel.setText(message);
         statusLabel.getStyleClass().add("error-text");
+    }
+
+    private void setupCreateForm() {
+        maxPlayersSpinner.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(
+                Constants.MIN_PLAYERS, Constants.MAX_PLAYERS, Constants.MAX_PLAYERS));
+        roundCountSpinner.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(
+                1, 10, Constants.DEFAULT_TOTAL_ROUNDS));
+        roundTimeSpinner.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(
+                Constants.MIN_ROUND_SECONDS, Constants.MAX_ROUND_SECONDS, Constants.ROUND_DURATION_SECONDS, 5));
+        wordChoiceSpinner.setValueFactory(new SpinnerValueFactory.IntegerSpinnerValueFactory(
+                Constants.MIN_WORD_CHOICE_SECONDS, Constants.MAX_WORD_CHOICE_SECONDS, Constants.CHOOSE_WORD_SECONDS));
+        difficultyBox.setItems(FXCollections.observableArrayList(WordDifficulty.values()));
+        difficultyBox.getSelectionModel().select(WordDifficulty.MEDIUM);
+
+        hintGroup = new ToggleGroup();
+        RadioButton hintOff = new RadioButton("Off");
+        RadioButton hintLight = new RadioButton("Light");
+        RadioButton hintNormal = new RadioButton("Normal");
+        hintOff.setToggleGroup(hintGroup);
+        hintLight.setToggleGroup(hintGroup);
+        hintNormal.setToggleGroup(hintGroup);
+        hintNormal.setSelected(true);
+        hintToggleBox.getChildren().setAll(hintOff, hintLight, hintNormal);
+
+        privacyGroup = new ToggleGroup();
+        RadioButton publicBtn = new RadioButton("Public");
+        RadioButton privateBtn = new RadioButton("Private");
+        publicBtn.setToggleGroup(privacyGroup);
+        privateBtn.setToggleGroup(privacyGroup);
+        publicBtn.setSelected(true);
+        privacyToggleBox.getChildren().setAll(publicBtn, privateBtn);
+
+        allowSpectatorsCheck.setSelected(true);
+        roomCodeField.setDisable(true);
+
+        privacyGroup.selectedToggleProperty().addListener((obs, oldVal, newVal) -> {
+            boolean isPrivate = newVal == privateBtn;
+            roomCodeField.setDisable(!isPrivate);
+        });
+
+        roomNameField.textProperty().addListener((obs, oldVal, newVal) -> validateCreateForm());
+        createConfirmButton.setOnAction(e -> submitCreateRoom());
+        createCancelButton.setOnAction(e -> closeCreateOverlay());
+
+        validateCreateForm();
+    }
+
+    private void validateCreateForm() {
+        ValidationUtils.ValidationResult nameResult = ValidationUtils.validateRoomName(roomNameField.getText());
+        if (!nameResult.isValid()) {
+            roomNameError.setText(nameResult.getErrorMessage());
+        } else {
+            roomNameError.setText("");
+        }
+        createConfirmButton.setDisable(!nameResult.isValid());
+    }
+
+    private void submitCreateRoom() {
+        ValidationUtils.ValidationResult nameResult = ValidationUtils.validateRoomName(roomNameField.getText());
+        if (!nameResult.isValid()) {
+            roomNameError.setText(nameResult.getErrorMessage());
+            return;
+        }
+        boolean isPrivate = ((RadioButton) privacyGroup.getSelectedToggle()).getText().equals("Private");
+        String roomCode = roomCodeField.isDisabled() ? null : roomCodeField.getText().trim();
+        HintMode hintMode = HintMode.NORMAL;
+        Toggle selectedHint = hintGroup.getSelectedToggle();
+        if (selectedHint != null) {
+            String label = ((RadioButton) selectedHint).getText().toUpperCase();
+            hintMode = HintMode.valueOf(label);
+        }
+
+        RoomSettings settings = new RoomSettings(
+                maxPlayersSpinner.getValue(),
+                roundTimeSpinner.getValue(),
+                roundCountSpinner.getValue(),
+                isPrivate,
+                roomCode == null || roomCode.isBlank() ? null : roomCode,
+                allowSpectatorsCheck.isSelected(),
+                wordChoiceSpinner.getValue(),
+                hintMode,
+                difficultyBox.getValue() == null ? WordDifficulty.MEDIUM : difficultyBox.getValue()
+        );
+
+        String name = roomNameField.getText().trim();
+        client.send(new CreateRoomMessage(name, settings));
+        closeCreateOverlay();
+        joinRoom(new RoomSummary(name, 0, GamePhase.WAITING, 0, settings), false);
+    }
+
+    private void openCreateOverlay() {
+        createErrorLabel.setText("");
+        createOverlay.setVisible(true);
+        createOverlay.setManaged(true);
+        createOverlay.setOpacity(0);
+        createOverlay.setScaleX(0.96);
+        createOverlay.setScaleY(0.96);
+        if (createFade != null) {
+            createFade.stop();
+        }
+        if (createScale != null) {
+            createScale.stop();
+        }
+        createFade = new FadeTransition(Duration.millis(180), createOverlay);
+        createFade.setFromValue(0);
+        createFade.setToValue(1);
+        createScale = new ScaleTransition(Duration.millis(180), createOverlay);
+        createScale.setFromX(0.96);
+        createScale.setFromY(0.96);
+        createScale.setToX(1);
+        createScale.setToY(1);
+        createFade.play();
+        createScale.play();
+        roomNameField.requestFocus();
+    }
+
+    private void closeCreateOverlay() {
+        if (!createOverlay.isVisible()) {
+            return;
+        }
+        if (createFade != null) {
+            createFade.stop();
+        }
+        createFade = new FadeTransition(Duration.millis(140), createOverlay);
+        createFade.setFromValue(createOverlay.getOpacity());
+        createFade.setToValue(0);
+        createFade.setOnFinished(event -> {
+            createOverlay.setVisible(false);
+            createOverlay.setManaged(false);
+            createOverlay.setOpacity(1);
+        });
+        createFade.play();
     }
 
     private void applyFilters() {
@@ -244,7 +378,11 @@ public class LobbyController implements ClientEventListener {
         if (message.isSuccess()) {
             sceneManager.showRoom();
         } else {
-            showError(message.getReason());
+            if (createOverlay.isVisible()) {
+                createErrorLabel.setText(message.getReason());
+            } else {
+                showError(message.getReason());
+            }
         }
     }
 

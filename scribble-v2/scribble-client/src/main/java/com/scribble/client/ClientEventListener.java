@@ -14,6 +14,8 @@ public interface ClientEventListener {
     default void onClear(ClearMessage message) {}
     default void onChat(ChatMessage message) {}
     default void onError(ErrorMessage message) {}
+    default void onGuessHint(GuessHintMessage message) {}
+    default void onPlayAgainStatus(PlayAgainStatusMessage message) {}
     default void onConnectionStatus(ConnectionStatus status) {}
     default void onLatency(long latencyMs) {}
     default void onDisconnected(String reason) {}

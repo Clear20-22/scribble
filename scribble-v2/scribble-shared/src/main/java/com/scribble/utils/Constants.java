@@ -14,6 +14,10 @@ public final class Constants {
     public static final int INTERMISSION_SECONDS = 3;
     public static final int CHOOSE_WORD_SECONDS = 10;
     public static final int DEFAULT_TOTAL_ROUNDS = 5;
+    public static final int MIN_ROUND_SECONDS = 30;
+    public static final int MAX_ROUND_SECONDS = 180;
+    public static final int MIN_WORD_CHOICE_SECONDS = 5;
+    public static final int MAX_WORD_CHOICE_SECONDS = 20;
 
     public static final int GUESS_BASE_POINTS = 100;
     public static final int GUESS_TIME_MULTIPLIER = 5;
@@ -29,12 +33,16 @@ public final class Constants {
     public static final int ROOM_NAME_MAX_LENGTH = 20;
     public static final String ROOM_NAME_PATTERN = "^[a-zA-Z0-9_-]+$";
 
-    public static final int DRAW_RATE_LIMIT_MS = 20;
+    public static final int DRAW_RATE_LIMIT_MS = 5;
     public static final int DRAW_BATCH_INTERVAL_MS = 30;
     public static final int DRAW_BATCH_SIZE = 6;
     public static final int DRAW_MAX_POINTS = 32;
     public static final int CHAT_RATE_LIMIT_MS = 400;
     public static final int GUESS_RATE_LIMIT_MS = 300;
+    public static final int MUTE_SECONDS = 15;
+    public static final int WARN_VIOLATIONS = 2;
+    public static final int MUTE_VIOLATIONS = 4;
+    public static final int KICK_VIOLATIONS = 8;
 
     public static final int PING_INTERVAL_SECONDS = 5;
     public static final int PING_TIMEOUT_SECONDS = 25;

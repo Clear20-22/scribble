@@ -9,14 +9,23 @@ import com.scribble.network.messages.*;
 import com.scribble.utils.ColorPalette;
 import com.scribble.utils.Constants;
 import com.scribble.utils.PaletteColor;
+import javafx.animation.FadeTransition;
+import javafx.animation.KeyFrame;
+import javafx.animation.ScaleTransition;
+import javafx.animation.Timeline;
 import javafx.fxml.FXML;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.*;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
+import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
+import javafx.util.Duration;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,6 +34,8 @@ import java.util.UUID;
 public class RoomController implements ClientEventListener {
     @FXML
     private Canvas drawCanvas;
+    @FXML
+    private StackPane canvasFrame;
     @FXML
     private HBox paletteBox;
     @FXML
@@ -61,6 +72,30 @@ public class RoomController implements ClientEventListener {
     private TextField chatInput;
     @FXML
     private Button undoButton;
+    @FXML
+    private VBox wordChoiceOverlay;
+    @FXML
+    private Label wordChoiceTitle;
+    @FXML
+    private Label wordChoiceTimer;
+    @FXML
+    private HBox wordChoiceButtons;
+    @FXML
+    private Label choosingHintLabel;
+    @FXML
+    private VBox leaderboardOverlay;
+    @FXML
+    private Label leaderboardTitle;
+    @FXML
+    private VBox leaderboardRows;
+    @FXML
+    private Label leaderboardVoteLabel;
+    @FXML
+    private Button playAgainButton;
+    @FXML
+    private Button returnLobbyButton;
+    @FXML
+    private Button leaveRoomButton;
 
     private SceneManager sceneManager;
     private Client client;
@@ -78,7 +113,15 @@ public class RoomController implements ClientEventListener {
     private long lastSentAt;
     private String strokeId;
     private List<StrokePoint> pendingPoints;
-    private ChoiceDialog<String> wordChoiceDialog;
+    private Timeline wordChoiceTimeline;
+    private int wordChoiceSecondsLeft;
+    private final List<DrawMessage> localStrokes = new ArrayList<>();
+    private FadeTransition overlayFade;
+    private ScaleTransition overlayScale;
+    private FadeTransition leaderboardFade;
+    private ScaleTransition leaderboardScale;
+    private List<PlayerInfo> lastPlayers = new ArrayList<>();
+    private PlayAgainStatusMessage lastPlayAgainStatus;
 
     public void setSceneManager(SceneManager sceneManager) {
         this.sceneManager = sceneManager;
@@ -101,7 +144,7 @@ public class RoomController implements ClientEventListener {
     }
 
     public void onShown() {
-        client.send(new RequestStrokeHistoryMessage());
+        client.send(new RequestStateMessage());
         updateRoleLabel();
     }
 
@@ -162,6 +205,7 @@ public class RoomController implements ClientEventListener {
         clearButton.setOnAction(e -> {
             if (isDrawer) {
                 client.send(new ClearMessage());
+                localStrokes.clear();
                 clearCanvas();
             }
         });
@@ -174,7 +218,20 @@ public class RoomController implements ClientEventListener {
             sceneManager.showLobby();
         });
 
+        playAgainButton.setOnAction(e -> client.send(new PlayAgainRequestMessage(true)));
+        returnLobbyButton.setOnAction(e -> {
+            client.send(new LeaveRoomMessage());
+            sceneManager.clearRoom();
+            sceneManager.showLobby();
+        });
+        leaveRoomButton.setOnAction(e -> {
+            client.send(new LeaveRoomMessage());
+            sceneManager.clearRoom();
+            sceneManager.showLobby();
+        });
+
         chatInput.setOnAction(e -> sendChat());
+
     }
 
     private void setupPalette() {
@@ -194,11 +251,16 @@ public class RoomController implements ClientEventListener {
                 super.updateItem(item, empty);
                 if (empty || item == null) {
                     setText(null);
-                    getStyleClass().removeAll("drawer-player", "guessed-player");
+                    getStyleClass().removeAll("drawer-player", "guessed-player", "rank-1", "rank-2", "rank-3");
                 } else {
                     String guessed = item.hasGuessed() ? " ✓" : "";
                     String spect = item.isSpectator() ? " (S)" : "";
-                    setText(item.getName() + spect + "  " + item.getScore() + guessed);
+                    int rank = getIndex() + 1;
+                    setText(rank + ". " + item.getName() + spect + "  " + item.getScore() + guessed);
+                    getStyleClass().removeAll("rank-1", "rank-2", "rank-3");
+                    if (rank <= 3) {
+                        getStyleClass().add("rank-" + rank);
+                    }
                     if (item.isDrawer()) {
                         if (!getStyleClass().contains("drawer-player")) {
                             getStyleClass().add("drawer-player");
@@ -246,7 +308,9 @@ public class RoomController implements ClientEventListener {
             return;
         }
         lastSentAt = now;
-        client.send(new DrawMessage(strokeId, pendingPoints, currentColor, brushSize, eraser));
+        DrawMessage drawMessage = new DrawMessage(strokeId, pendingPoints, currentColor, brushSize, eraser);
+        client.send(drawMessage);
+        localStrokes.add(drawMessage);
         StrokePoint last = pendingPoints.get(pendingPoints.size() - 1);
         pendingPoints = new ArrayList<>();
         pendingPoints.add(last);
@@ -258,7 +322,11 @@ public class RoomController implements ClientEventListener {
             return;
         }
         String filtered = filterProfanity(text.trim());
-        client.send(new GuessMessage(filtered));
+        if (spectator || isDrawer) {
+            client.send(new ChatMessage(filtered));
+        } else {
+            client.send(new GuessMessage(filtered));
+        }
         chatInput.clear();
     }
 
@@ -296,6 +364,7 @@ public class RoomController implements ClientEventListener {
             return;
         }
         client.send(new ClearMessage());
+        localStrokes.clear();
         clearCanvas();
     }
 
@@ -327,12 +396,33 @@ public class RoomController implements ClientEventListener {
         boolean showSpinner = message.getPhase() == GamePhase.CHOOSING_WORD && !message.isDrawer();
         chooseSpinner.setVisible(showSpinner);
         chooseSpinner.setManaged(showSpinner);
+        boolean showHint = message.getPhase() == GamePhase.CHOOSING_WORD && !message.isDrawer();
+        choosingHintLabel.setVisible(showHint);
+        choosingHintLabel.setManaged(showHint);
         updateDrawerState(message.isDrawer() && !spectator);
+        if (message.getPhase() == GamePhase.CHOOSING_WORD && message.isDrawer()) {
+            updateWordChoiceTimer(message.getTimeLeft());
+        } else {
+            hideWordChoiceOverlay();
+        }
+        if (message.getPhase() == GamePhase.FINISHED) {
+            showLeaderboard();
+        } else {
+            hideLeaderboard();
+        }
     }
 
     @Override
     public void onPlayerList(PlayerListMessage message) {
         playerList.getItems().setAll(message.getPlayers());
+        lastPlayers = new ArrayList<>(message.getPlayers());
+        updateLeaderboardRows();
+    }
+
+    @Override
+    public void onPlayAgainStatus(PlayAgainStatusMessage message) {
+        lastPlayAgainStatus = message;
+        updateLeaderboardVoteLabel();
     }
 
     @Override
@@ -341,6 +431,7 @@ public class RoomController implements ClientEventListener {
         if (points.size() < 2) {
             return;
         }
+        localStrokes.add(message);
         for (int i = 1; i < points.size(); i++) {
             StrokePoint a = points.get(i - 1);
             StrokePoint b = points.get(i);
@@ -351,15 +442,15 @@ public class RoomController implements ClientEventListener {
 
     @Override
     public void onClear(ClearMessage message) {
+        localStrokes.clear();
         clearCanvas();
     }
 
     @Override
     public void onStrokeHistory(StrokeHistoryMessage message) {
-        clearCanvas();
-        for (DrawMessage draw : message.getStrokes()) {
-            onDraw(draw);
-        }
+        localStrokes.clear();
+        localStrokes.addAll(message.getStrokes());
+        redrawCanvas();
     }
 
     @Override
@@ -367,30 +458,15 @@ public class RoomController implements ClientEventListener {
         if (spectator) {
             return;
         }
-        if (wordChoiceDialog != null) {
-            wordChoiceDialog.close();
-        }
-        ChoiceDialog<String> dialog = new ChoiceDialog<>(message.getChoices().get(0), message.getChoices());
-        dialog.setTitle("Choose a word");
-        dialog.setHeaderText("Pick a word (" + message.getSecondsToChoose() + "s)");
-        dialog.setContentText("Word:");
-        dialog.resultProperty().addListener((obs, oldVal, newVal) -> {
-            if (newVal != null) {
-                client.send(new ChooseWordMessage(newVal));
-            }
-        });
-        wordChoiceDialog = dialog;
-        dialog.show();
+        showWordChoiceOverlay(message.getChoices(), message.getSecondsToChoose());
     }
 
     @Override
     public void onWordChosen(WordChosenMessage message) {
         wordLabel.setText("Word: " + message.getWord());
+        localStrokes.clear();
         clearCanvas();
-        if (wordChoiceDialog != null) {
-            wordChoiceDialog.close();
-            wordChoiceDialog = null;
-        }
+        hideWordChoiceOverlay();
     }
 
     @Override
@@ -401,7 +477,7 @@ public class RoomController implements ClientEventListener {
         }
         spectator = message.isSpectator();
         updateRoleLabel();
-        client.send(new RequestStrokeHistoryMessage());
+        client.send(new RequestStateMessage());
     }
 
     @Override
@@ -425,7 +501,21 @@ public class RoomController implements ClientEventListener {
 
     @Override
     public void onError(ErrorMessage message) {
+        String code = message.getCode();
+        if ("DRAW_RATE".equals(code) || "WARN".equals(code)) {
+            return;
+        }
+        if ("MUTED".equals(code)) {
+            statusLabel.setText(message.getMessage());
+            return;
+        }
         chatList.getItems().add(new ChatEntry(message.getMessage(), ChatType.SYSTEM));
+    }
+
+    @Override
+    public void onGuessHint(GuessHintMessage message) {
+        chatList.getItems().add(new ChatEntry(message.getHint(), ChatType.SYSTEM));
+        chatList.scrollTo(chatList.getItems().size() - 1);
     }
 
     @Override
@@ -443,4 +533,228 @@ public class RoomController implements ClientEventListener {
     public void onLatency(long latencyMs) {
         pingLabel.setText(latencyMs + " ms");
     }
+
+    private void showWordChoiceOverlay(List<String> choices, int secondsToChoose) {
+        wordChoiceButtons.getChildren().clear();
+        for (String choice : choices) {
+            Button button = new Button(choice);
+            button.getStyleClass().add("choice-button");
+            button.setOnAction(e -> client.send(new ChooseWordMessage(choice)));
+            wordChoiceButtons.getChildren().add(button);
+        }
+        wordChoiceTitle.setText("Choose a word");
+        wordChoiceSecondsLeft = secondsToChoose;
+        updateWordChoiceTimer(wordChoiceSecondsLeft);
+        wordChoiceOverlay.setVisible(true);
+        wordChoiceOverlay.setManaged(true);
+        playOverlayIn();
+        startWordChoiceCountdown();
+    }
+
+    private void startWordChoiceCountdown() {
+        stopWordChoiceCountdown();
+        wordChoiceTimeline = new Timeline(new KeyFrame(Duration.seconds(1), e -> {
+            if (wordChoiceSecondsLeft > 0) {
+                wordChoiceSecondsLeft--;
+                updateWordChoiceTimer(wordChoiceSecondsLeft);
+            } else {
+                disableWordChoiceButtons(true);
+                stopWordChoiceCountdown();
+            }
+        }));
+        wordChoiceTimeline.setCycleCount(Timeline.INDEFINITE);
+        wordChoiceTimeline.play();
+    }
+
+    private void stopWordChoiceCountdown() {
+        if (wordChoiceTimeline != null) {
+            wordChoiceTimeline.stop();
+            wordChoiceTimeline = null;
+        }
+    }
+
+    private void updateWordChoiceTimer(int secondsLeft) {
+        wordChoiceTimer.setText("Time left: " + secondsLeft + "s");
+    }
+
+    private void disableWordChoiceButtons(boolean disabled) {
+        for (javafx.scene.Node node : wordChoiceButtons.getChildren()) {
+            node.setDisable(disabled);
+        }
+    }
+
+    private void hideWordChoiceOverlay() {
+        stopWordChoiceCountdown();
+        disableWordChoiceButtons(false);
+        playOverlayOut();
+    }
+
+    private void playOverlayIn() {
+        if (overlayFade != null) {
+            overlayFade.stop();
+        }
+        if (overlayScale != null) {
+            overlayScale.stop();
+        }
+        wordChoiceOverlay.setOpacity(0);
+        wordChoiceOverlay.setScaleX(0.96);
+        wordChoiceOverlay.setScaleY(0.96);
+        overlayFade = new FadeTransition(Duration.millis(180), wordChoiceOverlay);
+        overlayFade.setFromValue(0);
+        overlayFade.setToValue(1);
+        overlayScale = new ScaleTransition(Duration.millis(180), wordChoiceOverlay);
+        overlayScale.setFromX(0.96);
+        overlayScale.setFromY(0.96);
+        overlayScale.setToX(1);
+        overlayScale.setToY(1);
+        overlayFade.play();
+        overlayScale.play();
+    }
+
+    private void playOverlayOut() {
+        if (!wordChoiceOverlay.isVisible()) {
+            return;
+        }
+        if (overlayFade != null) {
+            overlayFade.stop();
+        }
+        overlayFade = new FadeTransition(Duration.millis(140), wordChoiceOverlay);
+        overlayFade.setFromValue(wordChoiceOverlay.getOpacity());
+        overlayFade.setToValue(0);
+        overlayFade.setOnFinished(event -> {
+            wordChoiceOverlay.setVisible(false);
+            wordChoiceOverlay.setManaged(false);
+            wordChoiceOverlay.setOpacity(1);
+        });
+        overlayFade.play();
+    }
+
+    private void showLeaderboard() {
+        updateLeaderboardRows();
+        updateLeaderboardVoteLabel();
+        leaderboardOverlay.setVisible(true);
+        leaderboardOverlay.setManaged(true);
+        playLeaderboardIn();
+    }
+
+    private void hideLeaderboard() {
+        if (!leaderboardOverlay.isVisible()) {
+            return;
+        }
+        if (leaderboardFade != null) {
+            leaderboardFade.stop();
+        }
+        leaderboardFade = new FadeTransition(Duration.millis(140), leaderboardOverlay);
+        leaderboardFade.setFromValue(leaderboardOverlay.getOpacity());
+        leaderboardFade.setToValue(0);
+        leaderboardFade.setOnFinished(event -> {
+            leaderboardOverlay.setVisible(false);
+            leaderboardOverlay.setManaged(false);
+            leaderboardOverlay.setOpacity(1);
+        });
+        leaderboardFade.play();
+    }
+
+    private void playLeaderboardIn() {
+        if (leaderboardFade != null) {
+            leaderboardFade.stop();
+        }
+        if (leaderboardScale != null) {
+            leaderboardScale.stop();
+        }
+        leaderboardOverlay.setOpacity(0);
+        leaderboardOverlay.setScaleX(0.96);
+        leaderboardOverlay.setScaleY(0.96);
+        leaderboardFade = new FadeTransition(Duration.millis(200), leaderboardOverlay);
+        leaderboardFade.setFromValue(0);
+        leaderboardFade.setToValue(1);
+        leaderboardScale = new ScaleTransition(Duration.millis(200), leaderboardOverlay);
+        leaderboardScale.setFromX(0.96);
+        leaderboardScale.setFromY(0.96);
+        leaderboardScale.setToX(1);
+        leaderboardScale.setToY(1);
+        leaderboardFade.play();
+        leaderboardScale.play();
+        animateLeaderboardRows();
+    }
+
+    private void updateLeaderboardRows() {
+        if (leaderboardRows == null) {
+            return;
+        }
+        leaderboardRows.getChildren().clear();
+        int count = Math.min(3, lastPlayers.size());
+        for (int i = 0; i < count; i++) {
+            PlayerInfo player = lastPlayers.get(i);
+            int rank = i + 1;
+            HBox row = new HBox();
+            row.setSpacing(10);
+            row.getStyleClass().add("leaderboard-row");
+            row.getStyleClass().add("rank-" + rank);
+
+            Region icon = new Region();
+            icon.getStyleClass().add("leaderboard-icon");
+            icon.getStyleClass().add("icon-rank-" + rank);
+            Label rankLabel = new Label(rank + getRankSuffix(rank));
+            rankLabel.getStyleClass().add("leaderboard-rank");
+            Label nameLabel = new Label(player.getName());
+            Label scoreLabel = new Label(player.getScore() + " pts");
+            scoreLabel.getStyleClass().add("leaderboard-score");
+
+            Region spacer = new Region();
+            HBox.setHgrow(spacer, Priority.ALWAYS);
+
+            row.getChildren().addAll(icon, rankLabel, nameLabel, spacer, scoreLabel);
+            leaderboardRows.getChildren().add(row);
+        }
+    }
+
+    private void animateLeaderboardRows() {
+        int index = 0;
+        for (javafx.scene.Node node : leaderboardRows.getChildren()) {
+            node.setOpacity(0);
+            FadeTransition fade = new FadeTransition(Duration.millis(180), node);
+            fade.setDelay(Duration.millis(60L * index));
+            fade.setFromValue(0);
+            fade.setToValue(1);
+            fade.play();
+            index++;
+        }
+    }
+
+    private String getRankSuffix(int rank) {
+        return switch (rank) {
+            case 1 -> "st";
+            case 2 -> "nd";
+            case 3 -> "rd";
+            default -> "th";
+        };
+    }
+
+    private void updateLeaderboardVoteLabel() {
+        if (leaderboardVoteLabel == null) {
+            return;
+        }
+        if (lastPlayAgainStatus == null) {
+            leaderboardVoteLabel.setText("Waiting for votes...");
+            return;
+        }
+        leaderboardVoteLabel.setText("Play again votes: "
+                + lastPlayAgainStatus.getYesVotes()
+                + " / " + lastPlayAgainStatus.getRequiredVotes());
+    }
+
+    private void redrawCanvas() {
+        clearCanvas();
+        for (DrawMessage draw : localStrokes) {
+            List<StrokePoint> points = draw.getPoints();
+            for (int i = 1; i < points.size(); i++) {
+                StrokePoint a = points.get(i - 1);
+                StrokePoint b = points.get(i);
+                drawLine(a.getX(), a.getY(), b.getX(), b.getY(),
+                        draw.getColor(), draw.getBrushSize(), draw.isEraser());
+            }
+        }
+    }
+
 }

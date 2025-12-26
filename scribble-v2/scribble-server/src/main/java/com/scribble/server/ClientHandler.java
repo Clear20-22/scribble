@@ -34,6 +34,8 @@ public class ClientHandler implements Runnable {
     private long lastChatAt;
     private long lastGuessAt;
     private volatile long lastPongAt;
+    private int violations;
+    private volatile long mutedUntil;
 
     public ClientHandler(Socket socket, Server server) {
         this.socket = socket;
@@ -145,6 +147,14 @@ public class ClientHandler implements Runnable {
             handleStrokeHistoryRequest();
             return;
         }
+        if (message instanceof RequestStateMessage) {
+            handleStateRequest();
+            return;
+        }
+        if (message instanceof PlayAgainRequestMessage playAgainRequest) {
+            handlePlayAgainRequest(playAgainRequest);
+            return;
+        }
         if (message instanceof LeaveRoomMessage) {
             leaveRoom();
             return;
@@ -199,8 +209,9 @@ public class ClientHandler implements Runnable {
         }
         Room targetRoom = server.getOrCreateRoom(message.getRoomName().trim(), null);
         String trimmedName = message.getPlayerName().trim();
-        if (!targetRoom.addPlayer(trimmedName, this, message.isSpectator())) {
-            send(new JoinResultMessage(false, "Name taken", targetRoom.getName(), trimmedName, false));
+        String joinError = targetRoom.addPlayer(trimmedName, this, message.isSpectator());
+        if (joinError != null) {
+            send(new JoinResultMessage(false, joinError, targetRoom.getName(), trimmedName, false));
             return;
         }
         this.playerName = trimmedName;
@@ -213,12 +224,22 @@ public class ClientHandler implements Runnable {
 
     private RoomSettings sanitizeSettings(RoomSettings settings) {
         if (settings == null) {
-            return new RoomSettings(Constants.MAX_PLAYERS, Constants.ROUND_DURATION_SECONDS, Constants.DEFAULT_TOTAL_ROUNDS, false);
+            return new RoomSettings(Constants.MAX_PLAYERS, Constants.ROUND_DURATION_SECONDS, Constants.DEFAULT_TOTAL_ROUNDS,
+                    false, null, true, Constants.CHOOSE_WORD_SECONDS, HintMode.NORMAL, WordDifficulty.MEDIUM);
         }
         int maxPlayers = Math.max(Constants.MIN_PLAYERS, Math.min(Constants.MAX_PLAYERS, settings.getMaxPlayers()));
-        int roundTime = Math.max(30, Math.min(120, settings.getRoundTimeSeconds()));
+        int roundTime = Math.max(Constants.MIN_ROUND_SECONDS, Math.min(Constants.MAX_ROUND_SECONDS, settings.getRoundTimeSeconds()));
         int totalRounds = Math.max(1, Math.min(10, settings.getTotalRounds()));
-        return new RoomSettings(maxPlayers, roundTime, totalRounds, settings.isPrivateRoom());
+        int wordChoiceSeconds = Math.max(Constants.MIN_WORD_CHOICE_SECONDS,
+                Math.min(Constants.MAX_WORD_CHOICE_SECONDS, settings.getWordChoiceSeconds()));
+        HintMode hintMode = settings.getHintMode() == null ? HintMode.NORMAL : settings.getHintMode();
+        WordDifficulty difficulty = settings.getWordDifficulty() == null ? WordDifficulty.MEDIUM : settings.getWordDifficulty();
+        String roomCode = settings.getRoomCode();
+        if (roomCode != null && roomCode.isBlank()) {
+            roomCode = null;
+        }
+        return new RoomSettings(maxPlayers, roundTime, totalRounds, settings.isPrivateRoom(),
+                roomCode, settings.isAllowSpectators(), wordChoiceSeconds, hintMode, difficulty);
     }
 
     private void handleChooseWord(ChooseWordMessage message) {
@@ -228,6 +249,9 @@ public class ClientHandler implements Runnable {
     }
 
     private void handleDraw(DrawMessage drawMessage) {
+        if (isMuted()) {
+            return;
+        }
         long now = System.currentTimeMillis();
         if (now - lastDrawAt < Constants.DRAW_RATE_LIMIT_MS) {
             return;
@@ -256,10 +280,21 @@ public class ClientHandler implements Runnable {
         }
     }
 
+    private void handlePlayAgainRequest(PlayAgainRequestMessage message) {
+        if (room != null) {
+            room.handlePlayAgainRequest(playerName, message.isPlayAgain());
+        }
+    }
+
     private void handleChat(String text) {
+        if (isMuted()) {
+            send(new ErrorMessage("MUTED", "You are temporarily muted."));
+            return;
+        }
         long now = System.currentTimeMillis();
         if (now - lastChatAt < Constants.CHAT_RATE_LIMIT_MS) {
             send(new ErrorMessage("CHAT_RATE", "You are sending messages too quickly."));
+            registerViolation("CHAT_RATE");
             return;
         }
         lastChatAt = now;
@@ -269,13 +304,26 @@ public class ClientHandler implements Runnable {
     }
 
     private void handleGuess(String text) {
+        if (isMuted()) {
+            send(new ErrorMessage("MUTED", "You are temporarily muted."));
+            return;
+        }
         long now = System.currentTimeMillis();
         if (now - lastGuessAt < Constants.GUESS_RATE_LIMIT_MS) {
             send(new ErrorMessage("GUESS_RATE", "Guessing too fast."));
+            registerViolation("GUESS_RATE");
             return;
         }
         lastGuessAt = now;
-        handleChat(text);
+        if (room != null) {
+            room.handleGuess(playerName, text);
+        }
+    }
+
+    private void handleStateRequest() {
+        if (room != null) {
+            room.sendFullState(this, playerName);
+        }
     }
 
     private void leaveRoom() {
@@ -306,5 +354,25 @@ public class ClientHandler implements Runnable {
 
     public boolean isConnected() {
         return running.get() && !socket.isClosed();
+    }
+
+    private boolean isMuted() {
+        return System.currentTimeMillis() < mutedUntil;
+    }
+
+    private void registerViolation(String code) {
+        violations++;
+        if (violations >= Constants.KICK_VIOLATIONS) {
+            disconnect("Abuse detected");
+            return;
+        }
+        if (violations >= Constants.MUTE_VIOLATIONS) {
+            mutedUntil = System.currentTimeMillis() + Constants.MUTE_SECONDS * 1000L;
+            send(new ErrorMessage("MUTED", "You are temporarily muted."));
+            return;
+        }
+        if (violations >= Constants.WARN_VIOLATIONS) {
+            send(new ErrorMessage("WARN", "Please slow down (" + code + ")."));
+        }
     }
 }
