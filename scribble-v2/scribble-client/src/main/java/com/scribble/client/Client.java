@@ -41,6 +41,9 @@ public class Client {
     private final AtomicBoolean heartbeatStarted = new AtomicBoolean(false);
     private volatile long lastLatencyMs;
 
+    // Network statistics for visualization
+    private final NetworkStats networkStats = new NetworkStats();
+
     public boolean connect(String host, int port) {
         if (connected.get()) {
             return true;
@@ -55,16 +58,34 @@ public class Client {
             connected.set(true);
             reconnectDelayMs = Constants.RECONNECT_INITIAL_DELAY_MS;
             lastPongAt = System.currentTimeMillis();
-            autoReconnect = true;
+            // Only enable auto-reconnect if not already in a reconnection cycle
+            if (!reconnecting.get()) {
+                autoReconnect = true;
+            }
+            networkStats.reset();
+            networkStats.onConnectionStarted();
             setStatus(ConnectionStatus.CONNECTED);
             startReader();
             startHeartbeat();
             return true;
         } catch (IOException e) {
             logger.error("Failed to connect", e);
-            disconnect("Connection failed");
+            // Don't trigger disconnect/reconnect loop on initial connection failure
+            closeSocketQuietly();
             return false;
         }
+    }
+
+    private void closeSocketQuietly() {
+        try {
+            if (socket != null && !socket.isClosed()) {
+                socket.close();
+            }
+        } catch (IOException ignored) {
+        }
+        socket = null;
+        in = null;
+        out = null;
     }
 
     public void setListener(ClientEventListener listener) {
@@ -85,11 +106,26 @@ public class Client {
             synchronized (out) {
                 out.writeObject(message);
                 out.flush();
+                // Track network statistics
+                networkStats.onMessageSent(message.getClass().getSimpleName(), estimateMessageSize(message));
             }
         } catch (IOException e) {
             logger.error("Send failed", e);
             disconnect("Send failed");
         }
+    }
+
+    private int estimateMessageSize(Message message) {
+        // Rough estimation of serialized message size
+        if (message instanceof DrawMessage)
+            return 150;
+        if (message instanceof PingMessage || message instanceof PongMessage)
+            return 24;
+        if (message instanceof ChatMessage || message instanceof GuessMessage)
+            return 100;
+        if (message instanceof StrokeHistoryMessage)
+            return 2000;
+        return 50; // Default estimate
     }
 
     private void startReader() {
@@ -114,6 +150,9 @@ public class Client {
         if (message == null) {
             return;
         }
+        // Track received message statistics
+        networkStats.onMessageReceived(message.getClass().getSimpleName(), estimateMessageSize(message));
+
         if (message instanceof PingMessage ping) {
             send(new PongMessage(ping.getTimestamp()));
             return;
@@ -121,9 +160,11 @@ public class Client {
         if (message instanceof PongMessage) {
             lastPongAt = System.currentTimeMillis();
             lastLatencyMs = lastPongAt - ((PongMessage) message).getTimestamp();
+            networkStats.onLatencyMeasured(lastLatencyMs);
             Platform.runLater(() -> {
                 if (listener != null) {
                     listener.onLatency(lastLatencyMs);
+                    listener.onNetworkStats(networkStats);
                 }
             });
             return;
@@ -158,6 +199,8 @@ public class Client {
                 listener.onGuessHint(hint);
             } else if (message instanceof PlayAgainStatusMessage status) {
                 listener.onPlayAgainStatus(status);
+            } else if (message instanceof ServerMetricsMessage metrics) {
+                listener.onServerMetrics(metrics);
             }
         });
     }
@@ -166,14 +209,9 @@ public class Client {
         if (!connected.getAndSet(false)) {
             return;
         }
-        try {
-            if (socket != null) {
-                socket.close();
-            }
-        } catch (IOException ignored) {
-        }
+        closeSocketQuietly();
         setStatus(ConnectionStatus.DISCONNECTED);
-        if (autoReconnect) {
+        if (autoReconnect && !reconnecting.get()) {
             attemptReconnect();
         }
         Platform.runLater(() -> {
@@ -189,6 +227,10 @@ public class Client {
         }
         scheduler.scheduleAtFixedRate(() -> {
             if (!connected.get()) {
+                return;
+            }
+            // Don't timeout during reconnection
+            if (reconnecting.get()) {
                 return;
             }
             send(new PingMessage(System.currentTimeMillis()));
@@ -214,7 +256,11 @@ public class Client {
         }
         boolean success = connect(lastHost, lastPort);
         if (success) {
+            // Reset pong timestamp to avoid immediate timeout
+            lastPongAt = System.currentTimeMillis();
             reconnecting.set(false);
+            networkStats.onReconnect();
+            // Only auto-rejoin if we were in a room
             if (playerName != null && roomName != null) {
                 send(new JoinMessage(roomName, playerName, spectator));
             }
@@ -235,5 +281,34 @@ public class Client {
 
     public boolean isConnected() {
         return connected.get();
+    }
+
+    public NetworkStats getNetworkStats() {
+        return networkStats;
+    }
+
+    public String getServerAddress() {
+        return lastHost + ":" + lastPort;
+    }
+
+    /**
+     * Subscribe or unsubscribe to server metrics (admin feature).
+     * When subscribed, the client will receive periodic ServerMetricsMessage
+     * updates.
+     * 
+     * @param subscribe true to subscribe, false to unsubscribe
+     */
+    public void subscribeToServerMetrics(boolean subscribe) {
+        send(new SubscribeMetricsMessage(subscribe, null));
+    }
+
+    /**
+     * Subscribe to server metrics with admin token (for authenticated access).
+     * 
+     * @param subscribe  true to subscribe, false to unsubscribe
+     * @param adminToken optional admin token for authentication
+     */
+    public void subscribeToServerMetrics(boolean subscribe, String adminToken) {
+        send(new SubscribeMetricsMessage(subscribe, adminToken));
     }
 }

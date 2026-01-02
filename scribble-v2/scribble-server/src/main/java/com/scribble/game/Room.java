@@ -3,6 +3,7 @@ package com.scribble.game;
 import com.scribble.network.messages.*;
 import com.scribble.server.ClientHandler;
 import com.scribble.server.Server;
+import com.scribble.server.monitor.RoomNetworkStats;
 import com.scribble.utils.Constants;
 import com.scribble.utils.Logger;
 import com.scribble.utils.ValidationUtils;
@@ -57,8 +58,9 @@ public class Room {
         this.name = name;
         this.server = server;
         this.settings = settings == null
-                ? new RoomSettings(Constants.MAX_PLAYERS, Constants.ROUND_DURATION_SECONDS, Constants.DEFAULT_TOTAL_ROUNDS,
-                false, null, true, Constants.CHOOSE_WORD_SECONDS, HintMode.NORMAL, WordDifficulty.MEDIUM)
+                ? new RoomSettings(Constants.MAX_PLAYERS, Constants.ROUND_DURATION_SECONDS,
+                        Constants.DEFAULT_TOTAL_ROUNDS,
+                        false, null, true, Constants.CHOOSE_WORD_SECONDS, HintMode.NORMAL, WordDifficulty.MEDIUM)
                 : settings;
         this.players = new ConcurrentHashMap<>();
         this.spectators = new HashSet<>();
@@ -77,6 +79,13 @@ public class Room {
         this.roundNumber = 0;
         this.timeLeft = settings != null ? settings.getRoundTimeSeconds() : Constants.ROUND_DURATION_SECONDS;
         this.playAgainOpen = false;
+    }
+
+    /**
+     * Gets the room's network stats tracker (if monitoring is enabled).
+     */
+    private RoomNetworkStats getRoomStats() {
+        return server.getRoomStats(name);
     }
 
     public String getName() {
@@ -120,6 +129,14 @@ public class Room {
             if (spectator) {
                 spectators.add(playerName);
             }
+
+            // Record player join in room stats
+            RoomNetworkStats stats = getRoomStats();
+            if (stats != null) {
+                stats.recordPlayerJoin(handler.getClientId());
+                stats.updatePlayerCounts(players.size(), spectators.size());
+            }
+
             broadcastSystem(playerName + " joined the room" + (spectator ? " as spectator" : ""));
             broadcastPlayerListLocked();
             sendStrokeHistory(handler);
@@ -130,11 +147,22 @@ public class Room {
 
     public void removePlayer(String playerName) {
         synchronized (lock) {
+            ClientHandler handler = players.get(playerName);
+
             players.remove(playerName);
             scores.remove(playerName);
             spectators.remove(playerName);
             playAgainVotes.remove(playerName);
             playersWhoGuessed.remove(playerName);
+
+            // Record player leave in room stats
+            if (handler != null) {
+                RoomNetworkStats stats = getRoomStats();
+                if (stats != null) {
+                    stats.recordPlayerLeave(handler.getClientId());
+                    stats.updatePlayerCounts(players.size(), spectators.size());
+                }
+            }
             broadcastSystem(playerName + " left the room");
             broadcastPlayerListLocked();
 
@@ -173,6 +201,13 @@ public class Room {
                 strokeOrder.add(key);
                 return new ArrayList<>();
             }).add(message);
+
+            // Record draw event in room stats
+            RoomNetworkStats stats = getRoomStats();
+            if (stats != null) {
+                stats.recordDrawEvent();
+            }
+
             broadcastToOthers(sender, message);
         }
     }
@@ -304,6 +339,12 @@ public class Room {
                 broadcast(new ChatMessage(sender, "guessed the word!", ChatType.CORRECT));
                 broadcastPlayerListLocked();
 
+                // Record correct guess in room stats
+                RoomNetworkStats stats = getRoomStats();
+                if (stats != null) {
+                    stats.recordGuessAttempt(true);
+                }
+
                 if (allNonDrawerGuessed()) {
                     startIntermissionLocked();
                 } else {
@@ -322,6 +363,19 @@ public class Room {
                 handler.send(new GuessHintMessage("Close!"));
             }
         }
+
+        // Record incorrect guess attempt in room stats (only if in game and not already
+        // guessed)
+        if (phase == GamePhase.RUNNING && currentWord != null
+                && !playersWhoGuessed.contains(sender)
+                && !spectators.contains(sender)
+                && !sender.equals(currentDrawer)) {
+            RoomNetworkStats stats = getRoomStats();
+            if (stats != null) {
+                stats.recordGuessAttempt(false);
+            }
+        }
+
         broadcast(new ChatMessage(sender, sanitized, ChatType.CHAT));
     }
 
@@ -347,6 +401,13 @@ public class Room {
         currentChoices = wordProvider.randomChoices(3);
         timeLeft = settings.getWordChoiceSeconds();
         logger.info("Round " + roundNumber + " choosing word in room " + name + ", drawer=" + currentDrawer);
+
+        // Record round start in room stats
+        RoomNetworkStats stats = getRoomStats();
+        if (stats != null) {
+            stats.recordRoundStart();
+        }
+
         sendWordChoicesLocked();
         broadcastPlayerListLocked();
         broadcastGameStateLocked();
@@ -513,16 +574,33 @@ public class Room {
     }
 
     private void broadcast(Message message) {
+        int recipientCount = players.size();
         for (ClientHandler handler : players.values()) {
             handler.send(message);
+        }
+
+        // Record broadcast in room stats
+        RoomNetworkStats stats = getRoomStats();
+        if (stats != null) {
+            int estimatedSize = estimateMessageSize(message);
+            stats.recordBroadcast(recipientCount, recipientCount * estimatedSize);
         }
     }
 
     private void broadcastToOthers(String sender, Message message) {
+        int recipientCount = 0;
         for (Map.Entry<String, ClientHandler> entry : players.entrySet()) {
             if (!entry.getKey().equals(sender)) {
                 entry.getValue().send(message);
+                recipientCount++;
             }
+        }
+
+        // Record broadcast in room stats
+        RoomNetworkStats stats = getRoomStats();
+        if (stats != null && recipientCount > 0) {
+            int estimatedSize = estimateMessageSize(message);
+            stats.recordBroadcast(recipientCount, recipientCount * estimatedSize);
         }
     }
 
@@ -635,6 +713,25 @@ public class Room {
         return text.trim().toLowerCase().replaceAll("[^a-z0-9]", "");
     }
 
+    private int estimateMessageSize(Message message) {
+        if (message == null) {
+            return 0;
+        }
+        int base = 100;
+        if (message instanceof DrawMessage) {
+            return base + 200;
+        } else if (message instanceof ChatMessage || message instanceof GuessMessage) {
+            return base + 100;
+        } else if (message instanceof GameStateMessage) {
+            return base + 500;
+        } else if (message instanceof StrokeHistoryMessage) {
+            return base + 2000;
+        } else if (message instanceof WordChoicesMessage || message instanceof WordChosenMessage) {
+            return base + 150;
+        }
+        return base + 50;
+    }
+
     private int countPlayAgainVotesLocked() {
         int count = 0;
         for (Boolean vote : playAgainVotes.values()) {
@@ -656,7 +753,8 @@ public class Room {
             String name = entry.getKey();
             boolean guessed = playersWhoGuessed.contains(name);
             boolean spectator = spectators.contains(name);
-            list.add(new PlayerInfo(name, scores.getOrDefault(name, 0), name.equals(currentDrawer), guessed, spectator));
+            list.add(
+                    new PlayerInfo(name, scores.getOrDefault(name, 0), name.equals(currentDrawer), guessed, spectator));
         }
         list.sort((a, b) -> Integer.compare(b.getScore(), a.getScore()));
         return new PlayerListMessage(list);

@@ -32,6 +32,7 @@
                 <Region HBox.hgrow="ALWAYS" />
                 <Label fx:id="roleLabel" text="Player" styleClass="status-pill" />
                 <Label fx:id="pingLabel" text="- ms" styleClass="status-pill" />
+                <ToggleButton fx:id="networkMonitorToggle" text="📊 Network" styleClass="network-toggle" />
                 <Button fx:id="leaveButton" text="Leave" styleClass="secondary-button" />
             </HBox>
             <Label fx:id="connectionStatusLabel" text="Connected" styleClass="status-banner" />
@@ -100,4 +101,91 @@
             <TextField fx:id="chatInput" promptText="Type your guess or message and press Enter" />
         </VBox>
     </right>
+    
+    <bottom>
+        <VBox fx:id="networkMonitorPanel" visible="false" managed="false" spacing="8" styleClass="network-panel">
+            <padding>
+                <Insets top="12" right="16" bottom="12" left="16" />
+            </padding>
+            <HBox spacing="20" alignment="CENTER_LEFT">
+                <Label text="🌐 Network Monitor" styleClass="network-title" />
+                <Region HBox.hgrow="ALWAYS" />
+                <Label fx:id="serverAddressLabel" text="Server: localhost:5555" styleClass="network-label" />
+            </HBox>
+            <HBox spacing="30" alignment="CENTER_LEFT">
+                <!-- Connection Stats -->
+                <VBox spacing="4" styleClass="stat-box">
+                    <Label text="Connection" styleClass="stat-header" />
+                    <HBox spacing="8">
+                        <Label text="Duration:" styleClass="stat-label" />
+                        <Label fx:id="connectionDurationLabel" text="0:00" styleClass="stat-value" />
+                    </HBox>
+                    <HBox spacing="8">
+                        <Label text="Reconnects:" styleClass="stat-label" />
+                        <Label fx:id="reconnectCountLabel" text="0" styleClass="stat-value" />
+                    </HBox>
+                </VBox>
+                
+                <!-- Message Stats -->
+                <VBox spacing="4" styleClass="stat-box">
+                    <Label text="Messages" styleClass="stat-header" />
+                    <HBox spacing="8">
+                        <Label text="Sent:" styleClass="stat-label" />
+                        <Label fx:id="messagesSentLabel" text="0" styleClass="stat-value" />
+                    </HBox>
+                    <HBox spacing="8">
+                        <Label text="Received:" styleClass="stat-label" />
+                        <Label fx:id="messagesReceivedLabel" text="0" styleClass="stat-value" />
+                    </HBox>
+                </VBox>
+                
+                <!-- Bandwidth Stats -->
+                <VBox spacing="4" styleClass="stat-box">
+                    <Label text="Bandwidth" styleClass="stat-header" />
+                    <HBox spacing="8">
+                        <Label text="↑ Upload:" styleClass="stat-label" />
+                        <Label fx:id="bytesSentLabel" text="0 B" styleClass="stat-value" />
+                    </HBox>
+                    <HBox spacing="8">
+                        <Label text="↓ Download:" styleClass="stat-label" />
+                        <Label fx:id="bytesReceivedLabel" text="0 B" styleClass="stat-value" />
+                    </HBox>
+                </VBox>
+                
+                <!-- Latency Stats -->
+                <VBox spacing="4" styleClass="stat-box">
+                    <Label text="Latency (RTT)" styleClass="stat-header" />
+                    <HBox spacing="8">
+                        <Label text="Current:" styleClass="stat-label" />
+                        <Label fx:id="currentLatencyLabel" text="- ms" styleClass="stat-value-highlight" />
+                    </HBox>
+                    <HBox spacing="8">
+                        <Label text="Avg/Min/Max:" styleClass="stat-label" />
+                        <Label fx:id="latencyStatsLabel" text="-/-/- ms" styleClass="stat-value" />
+                    </HBox>
+                </VBox>
+                
+                <!-- Throughput -->
+                <VBox spacing="4" styleClass="stat-box">
+                    <Label text="Throughput" styleClass="stat-header" />
+                    <HBox spacing="8">
+                        <Label text="Msgs/sec:" styleClass="stat-label" />
+                        <Label fx:id="throughputLabel" text="0.0" styleClass="stat-value" />
+                    </HBox>
+                </VBox>
+            </HBox>
+            
+            <!-- Latency Graph Canvas -->
+            <VBox spacing="4">
+                <Label text="📈 Latency History (last 60 samples)" styleClass="stat-header" />
+                <Canvas fx:id="latencyGraphCanvas" width="900" height="60" styleClass="latency-graph" />
+            </VBox>
+            
+            <!-- Message Log -->
+            <VBox spacing="4">
+                <Label text="📋 Recent Packets (last 20)" styleClass="stat-header" />
+                <ListView fx:id="messageLogList" prefHeight="80" styleClass="message-log" />
+            </VBox>
+        </VBox>
+    </bottom>
 </BorderPane>

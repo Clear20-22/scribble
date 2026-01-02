@@ -95,6 +95,10 @@ public class LobbyController implements ClientEventListener {
     private final ObservableList<RoomSummary> roomData = FXCollections.observableArrayList();
     private final FilteredList<RoomSummary> filteredRooms = new FilteredList<>(roomData);
 
+    // Track pending room join after creation
+    private String pendingJoinRoom = null;
+    private boolean pendingJoinSpectator = false;
+
     public void setSceneManager(SceneManager sceneManager) {
         this.sceneManager = sceneManager;
     }
@@ -113,7 +117,8 @@ public class LobbyController implements ClientEventListener {
         nameColumn.setCellValueFactory(new PropertyValueFactory<>("name"));
         playersColumn.setCellValueFactory(cell -> {
             RoomSummary summary = cell.getValue();
-            int maxPlayers = summary.getSettings() != null ? summary.getSettings().getMaxPlayers() : Constants.MAX_PLAYERS;
+            int maxPlayers = summary.getSettings() != null ? summary.getSettings().getMaxPlayers()
+                    : Constants.MAX_PLAYERS;
             return new ReadOnlyStringWrapper(summary.getPlayerCount() + "/" + maxPlayers);
         });
         phaseColumn.setCellValueFactory(cell -> new ReadOnlyStringWrapper(cell.getValue().getPhase().name()));
@@ -293,13 +298,16 @@ public class LobbyController implements ClientEventListener {
                 allowSpectatorsCheck.isSelected(),
                 wordChoiceSpinner.getValue(),
                 hintMode,
-                difficultyBox.getValue() == null ? WordDifficulty.MEDIUM : difficultyBox.getValue()
-        );
+                difficultyBox.getValue() == null ? WordDifficulty.MEDIUM : difficultyBox.getValue());
 
         String name = roomNameField.getText().trim();
+        // Set pending join - will join once room appears in room list
+        pendingJoinRoom = name;
+        pendingJoinSpectator = false;
         client.send(new CreateRoomMessage(name, settings));
         closeCreateOverlay();
-        joinRoom(new RoomSummary(name, 0, GamePhase.WAITING, 0, settings), false);
+        setBusy(true);
+        statusLabel.setText("Creating room...");
     }
 
     private void openCreateOverlay() {
@@ -368,7 +376,33 @@ public class LobbyController implements ClientEventListener {
         roomData.setAll(message.getRooms());
         applyFilters();
         statusLabel.setText("");
-        setBusy(false);
+
+        // Check if we have a pending room join after creation
+        if (pendingJoinRoom != null) {
+            String roomToJoin = pendingJoinRoom;
+            boolean spectator = pendingJoinSpectator;
+            pendingJoinRoom = null;
+            pendingJoinSpectator = false;
+
+            // Find the room we just created
+            RoomSummary targetRoom = null;
+            for (RoomSummary room : message.getRooms()) {
+                if (room.getName().equals(roomToJoin)) {
+                    targetRoom = room;
+                    break;
+                }
+            }
+
+            if (targetRoom != null) {
+                joinRoom(targetRoom, spectator);
+            } else {
+                // Room not found - maybe it failed to create
+                setBusy(false);
+                showError("Failed to create room");
+            }
+        } else {
+            setBusy(false);
+        }
     }
 
     @Override
@@ -402,7 +436,8 @@ public class LobbyController implements ClientEventListener {
     @Override
     public void onConnectionStatus(ConnectionStatus status) {
         connectionStatusLabel.setText(status.name());
-        connectionStatusLabel.getStyleClass().removeAll("status-connected", "status-reconnecting", "status-disconnected");
+        connectionStatusLabel.getStyleClass().removeAll("status-connected", "status-reconnecting",
+                "status-disconnected");
         switch (status) {
             case CONNECTED -> connectionStatusLabel.getStyleClass().add("status-connected");
             case RECONNECTING -> connectionStatusLabel.getStyleClass().add("status-reconnecting");

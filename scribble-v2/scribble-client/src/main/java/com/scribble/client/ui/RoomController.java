@@ -4,6 +4,7 @@ import com.scribble.client.ChatEntry;
 import com.scribble.client.Client;
 import com.scribble.client.ClientEventListener;
 import com.scribble.client.ConnectionStatus;
+import com.scribble.client.NetworkStats;
 import com.scribble.client.SceneManager;
 import com.scribble.network.messages.*;
 import com.scribble.utils.ColorPalette;
@@ -96,6 +97,36 @@ public class RoomController implements ClientEventListener {
     private Button returnLobbyButton;
     @FXML
     private Button leaveRoomButton;
+
+    // Network Monitor Panel
+    @FXML
+    private ToggleButton networkMonitorToggle;
+    @FXML
+    private VBox networkMonitorPanel;
+    @FXML
+    private Label serverAddressLabel;
+    @FXML
+    private Label connectionDurationLabel;
+    @FXML
+    private Label reconnectCountLabel;
+    @FXML
+    private Label messagesSentLabel;
+    @FXML
+    private Label messagesReceivedLabel;
+    @FXML
+    private Label bytesSentLabel;
+    @FXML
+    private Label bytesReceivedLabel;
+    @FXML
+    private Label currentLatencyLabel;
+    @FXML
+    private Label latencyStatsLabel;
+    @FXML
+    private Label throughputLabel;
+    @FXML
+    private Canvas latencyGraphCanvas;
+    @FXML
+    private ListView<String> messageLogList;
 
     private SceneManager sceneManager;
     private Client client;
@@ -232,6 +263,36 @@ public class RoomController implements ClientEventListener {
 
         chatInput.setOnAction(e -> sendChat());
 
+        // Setup Network Monitor Panel
+        setupNetworkMonitor();
+
+    }
+
+    private void setupNetworkMonitor() {
+        // Toggle network monitor visibility
+        networkMonitorToggle.selectedProperty().addListener((obs, oldVal, newVal) -> {
+            networkMonitorPanel.setVisible(newVal);
+            networkMonitorPanel.setManaged(newVal);
+        });
+
+        // Setup message log list
+        messageLogList.setCellFactory(list -> new ListCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    getStyleClass().removeAll("message-sent", "message-received");
+                } else {
+                    setText(item);
+                    if (item.startsWith("→")) {
+                        getStyleClass().add("message-sent");
+                    } else if (item.startsWith("←")) {
+                        getStyleClass().add("message-received");
+                    }
+                }
+            }
+        });
     }
 
     private void setupPalette() {
@@ -331,7 +392,7 @@ public class RoomController implements ClientEventListener {
     }
 
     private String filterProfanity(String input) {
-        String[] blocked = {"badword", "uglyword"};
+        String[] blocked = { "badword", "uglyword" };
         String output = input;
         for (String word : blocked) {
             output = output.replaceAll("(?i)" + word, "***");
@@ -339,7 +400,8 @@ public class RoomController implements ClientEventListener {
         return output;
     }
 
-    private void drawLine(double startX, double startY, double endX, double endY, String color, double size, boolean eraser) {
+    private void drawLine(double startX, double startY, double endX, double endY, String color, double size,
+            boolean eraser) {
         gc.setStroke(eraser ? Color.WHITE : Color.web(color));
         gc.setLineWidth(size);
         gc.strokeLine(startX, startY, endX, endY);
@@ -521,7 +583,8 @@ public class RoomController implements ClientEventListener {
     @Override
     public void onConnectionStatus(ConnectionStatus status) {
         connectionStatusLabel.setText(status.name());
-        connectionStatusLabel.getStyleClass().removeAll("status-connected", "status-reconnecting", "status-disconnected");
+        connectionStatusLabel.getStyleClass().removeAll("status-connected", "status-reconnecting",
+                "status-disconnected");
         switch (status) {
             case CONNECTED -> connectionStatusLabel.getStyleClass().add("status-connected");
             case RECONNECTING -> connectionStatusLabel.getStyleClass().add("status-reconnecting");
@@ -532,6 +595,130 @@ public class RoomController implements ClientEventListener {
     @Override
     public void onLatency(long latencyMs) {
         pingLabel.setText(latencyMs + " ms");
+        currentLatencyLabel.setText(latencyMs + " ms");
+
+        // Update color based on latency quality
+        currentLatencyLabel.getStyleClass().removeAll("stat-value-highlight", "stat-value-warning",
+                "stat-value-danger");
+        if (latencyMs < 50) {
+            currentLatencyLabel.setStyle("-fx-text-fill: #22c55e;"); // Green - excellent
+        } else if (latencyMs < 100) {
+            currentLatencyLabel.setStyle("-fx-text-fill: #eab308;"); // Yellow - good
+        } else if (latencyMs < 200) {
+            currentLatencyLabel.setStyle("-fx-text-fill: #f97316;"); // Orange - fair
+        } else {
+            currentLatencyLabel.setStyle("-fx-text-fill: #ef4444;"); // Red - poor
+        }
+    }
+
+    @Override
+    public void onNetworkStats(NetworkStats stats) {
+        if (stats == null)
+            return;
+
+        // Update server address
+        if (client != null) {
+            serverAddressLabel.setText("Server: " + client.getServerAddress());
+        }
+
+        // Update connection stats
+        connectionDurationLabel.setText(stats.formatDuration(stats.getConnectionDurationMs()));
+        reconnectCountLabel.setText(String.valueOf(stats.getReconnectCount()));
+
+        // Update message stats
+        messagesSentLabel.setText(String.valueOf(stats.getMessagesSent()));
+        messagesReceivedLabel.setText(String.valueOf(stats.getMessagesReceived()));
+
+        // Update bandwidth stats
+        bytesSentLabel.setText(stats.formatBytes(stats.getBytesSent()));
+        bytesReceivedLabel.setText(stats.formatBytes(stats.getBytesReceived()));
+
+        // Update latency stats
+        latencyStatsLabel.setText(String.format("%.0f/%d/%d ms",
+                stats.getAverageLatency(), stats.getMinLatency(), stats.getMaxLatency()));
+
+        // Update throughput
+        throughputLabel.setText(String.format("%.1f", stats.getMessagesPerSecond()));
+
+        // Update latency graph
+        drawLatencyGraph(stats);
+
+        // Update message log (show last 20)
+        List<NetworkStats.MessageLogEntry> log = stats.getMessageLog();
+        messageLogList.getItems().clear();
+        int count = Math.min(20, log.size());
+        for (int i = 0; i < count; i++) {
+            NetworkStats.MessageLogEntry entry = log.get(i);
+            String timeStr = String.format("%tT", entry.getTimestamp());
+            messageLogList.getItems().add(String.format("%s [%s] %s %s (%d B)",
+                    timeStr,
+                    entry.getDirection().getSymbol(),
+                    entry.getDirection() == NetworkStats.MessageDirection.SENT ? "TX" : "RX",
+                    entry.getMessageType(),
+                    entry.getBytes()));
+        }
+    }
+
+    private void drawLatencyGraph(NetworkStats stats) {
+        GraphicsContext gctx = latencyGraphCanvas.getGraphicsContext2D();
+        double width = latencyGraphCanvas.getWidth();
+        double height = latencyGraphCanvas.getHeight();
+
+        // Clear background
+        gctx.setFill(Color.web("#1e293b"));
+        gctx.fillRect(0, 0, width, height);
+
+        List<Long> history = stats.getLatencyHistory();
+        if (history.isEmpty()) {
+            gctx.setFill(Color.web("#64748b"));
+            gctx.fillText("No latency data yet...", width / 2 - 50, height / 2);
+            return;
+        }
+
+        // Find max latency for scaling
+        long maxLatency = history.stream().mapToLong(Long::longValue).max().orElse(100);
+        maxLatency = Math.max(maxLatency, 50); // Minimum scale of 50ms
+
+        // Draw grid lines
+        gctx.setStroke(Color.web("#334155"));
+        gctx.setLineWidth(0.5);
+        for (int i = 0; i <= 4; i++) {
+            double y = height * i / 4;
+            gctx.strokeLine(0, y, width, y);
+        }
+
+        // Draw latency line
+        double pointWidth = width / 60.0; // 60 samples
+        gctx.setStroke(Color.web("#22c55e"));
+        gctx.setLineWidth(2);
+        gctx.beginPath();
+
+        for (int i = 0; i < history.size(); i++) {
+            double x = (60 - history.size() + i) * pointWidth;
+            double y = height - (history.get(i) * height / maxLatency);
+            y = Math.max(2, Math.min(height - 2, y)); // Clamp to visible area
+
+            if (i == 0) {
+                gctx.moveTo(x, y);
+            } else {
+                gctx.lineTo(x, y);
+            }
+        }
+        gctx.stroke();
+
+        // Draw points
+        gctx.setFill(Color.web("#22c55e"));
+        for (int i = 0; i < history.size(); i++) {
+            double x = (60 - history.size() + i) * pointWidth;
+            double y = height - (history.get(i) * height / maxLatency);
+            y = Math.max(2, Math.min(height - 2, y));
+            gctx.fillOval(x - 2, y - 2, 4, 4);
+        }
+
+        // Draw scale labels
+        gctx.setFill(Color.web("#94a3b8"));
+        gctx.fillText("0ms", 5, height - 3);
+        gctx.fillText(maxLatency + "ms", 5, 12);
     }
 
     private void showWordChoiceOverlay(List<String> choices, int secondsToChoose) {

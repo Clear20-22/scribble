@@ -317,3 +317,98 @@
     -fx-text-fill: #9a3412;
     -fx-font-weight: 700;
 }
+
+/* Network Monitor Panel Styles */
+.network-toggle {
+    -fx-background-color: #1e293b;
+    -fx-text-fill: #ffffff;
+    -fx-font-size: 11px;
+    -fx-background-radius: 8;
+    -fx-padding: 4 10;
+}
+
+.network-toggle:selected {
+    -fx-background-color: #3b82f6;
+    -fx-text-fill: #ffffff;
+}
+
+.network-panel {
+    -fx-background-color: linear-gradient(to right, #0f172a, #1e293b);
+    -fx-border-color: #334155;
+    -fx-border-width: 1 0 0 0;
+}
+
+.network-title {
+    -fx-font-size: 14px;
+    -fx-font-weight: 700;
+    -fx-text-fill: #f8fafc;
+}
+
+.network-label {
+    -fx-font-size: 11px;
+    -fx-text-fill: #94a3b8;
+}
+
+.stat-box {
+    -fx-background-color: rgba(51, 65, 85, 0.5);
+    -fx-background-radius: 8;
+    -fx-padding: 8 12;
+    -fx-min-width: 140;
+}
+
+.stat-header {
+    -fx-font-size: 11px;
+    -fx-font-weight: 700;
+    -fx-text-fill: #60a5fa;
+}
+
+.stat-label {
+    -fx-font-size: 11px;
+    -fx-text-fill: #94a3b8;
+}
+
+.stat-value {
+    -fx-font-size: 11px;
+    -fx-font-weight: 600;
+    -fx-text-fill: #e2e8f0;
+}
+
+.stat-value-highlight {
+    -fx-font-size: 12px;
+    -fx-font-weight: 700;
+    -fx-text-fill: #22c55e;
+}
+
+.latency-graph {
+    -fx-background-color: #1e293b;
+    -fx-border-color: #334155;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+}
+
+.message-log {
+    -fx-background-color: #1e293b;
+    -fx-border-color: #334155;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-font-family: "Menlo", "Consolas", monospace;
+    -fx-font-size: 10px;
+}
+
+.message-log .list-cell {
+    -fx-background-color: transparent;
+    -fx-text-fill: #94a3b8;
+    -fx-padding: 2 8;
+}
+
+.message-log .list-cell:odd {
+    -fx-background-color: rgba(51, 65, 85, 0.3);
+}
+
+.message-sent {
+    -fx-text-fill: #22c55e;
+}
+
+.message-received {
+    -fx-text-fill: #60a5fa;
+}

@@ -2,14 +2,13 @@ package com.scribble.server;
 
 import com.scribble.game.Room;
 import com.scribble.network.messages.*;
+import com.scribble.server.monitor.ClientNetworkStats;
+import com.scribble.server.monitor.ServerNetworkStats;
 import com.scribble.utils.Constants;
 import com.scribble.utils.Logger;
 import com.scribble.utils.ValidationUtils;
 
-import java.io.EOFException;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
+import java.io.*;
 import java.net.Socket;
 import java.net.SocketException;
 import java.util.concurrent.BlockingQueue;
@@ -28,6 +27,12 @@ public class ClientHandler implements Runnable {
     private Thread writerThread;
     private int messagesSinceReset;
 
+    // Unique client identifier
+    private final String clientId;
+
+    // Network monitoring
+    private final ClientNetworkStats networkStats;
+
     private String playerName;
     private Room room;
     private long lastDrawAt;
@@ -38,8 +43,14 @@ public class ClientHandler implements Runnable {
     private volatile long mutedUntil;
 
     public ClientHandler(Socket socket, Server server) {
+        this(socket, server, java.util.UUID.randomUUID().toString(), null);
+    }
+
+    public ClientHandler(Socket socket, Server server, String clientId, ClientNetworkStats networkStats) {
         this.socket = socket;
         this.server = server;
+        this.clientId = clientId;
+        this.networkStats = networkStats;
         this.outgoing = new LinkedBlockingQueue<>();
         this.running = new AtomicBoolean(true);
         this.lastPongAt = System.currentTimeMillis();
@@ -64,6 +75,9 @@ public class ClientHandler implements Runnable {
                 try {
                     Message message = outgoing.take();
                     synchronized (out) {
+                        // Estimate message size before sending
+                        int estimatedSize = estimateMessageSize(message);
+
                         out.writeObject(message);
                         out.flush();
                         messagesSinceReset++;
@@ -71,6 +85,9 @@ public class ClientHandler implements Runnable {
                             out.reset();
                             messagesSinceReset = 0;
                         }
+
+                        // Record TX stats
+                        recordTx(message, estimatedSize);
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -79,7 +96,7 @@ public class ClientHandler implements Runnable {
                     disconnect("Write failed");
                 }
             }
-        }, "ClientWriter-" + socket.getPort());
+        }, "ClientWriter-" + (clientId.length() > 8 ? clientId.substring(0, 8) : clientId));
         writerThread.setDaemon(true);
         writerThread.start();
     }
@@ -89,6 +106,11 @@ public class ClientHandler implements Runnable {
         try {
             while (running.get()) {
                 Message message = (Message) in.readObject();
+
+                // Record RX stats
+                int estimatedSize = estimateMessageSize(message);
+                recordRx(message, estimatedSize);
+
                 handleMessage(message);
             }
         } catch (SocketException | EOFException e) {
@@ -107,7 +129,12 @@ public class ClientHandler implements Runnable {
     }
 
     public void sendPing() {
-        send(new PingMessage(System.currentTimeMillis()));
+        long now = System.currentTimeMillis();
+        ServerNetworkStats serverStats = server.getNetworkStats();
+        if (serverStats != null) {
+            serverStats.recordPingSent(clientId);
+        }
+        send(new PingMessage(now));
     }
 
     public boolean isTimedOut() {
@@ -121,6 +148,10 @@ public class ClientHandler implements Runnable {
         }
         if (message instanceof PongMessage pong) {
             lastPongAt = System.currentTimeMillis();
+            ServerNetworkStats serverStats = server.getNetworkStats();
+            if (serverStats != null) {
+                serverStats.recordPongReceived(clientId);
+            }
             return;
         }
         if (message instanceof PingMessage ping) {
@@ -179,6 +210,12 @@ public class ClientHandler implements Runnable {
             handleChat(chatMessage.getText());
             return;
         }
+
+        // Handle metrics subscription (admin feature)
+        if (message instanceof SubscribeMetricsMessage subscribeMsg) {
+            handleMetricsSubscription(subscribeMsg);
+            return;
+        }
     }
 
     private void handleCreateRoom(CreateRoomMessage message) {
@@ -199,12 +236,14 @@ public class ClientHandler implements Runnable {
         }
         ValidationUtils.ValidationResult nameValidation = ValidationUtils.validatePlayerName(message.getPlayerName());
         if (!nameValidation.isValid()) {
-            send(new JoinResultMessage(false, nameValidation.getErrorMessage(), message.getRoomName(), message.getPlayerName(), false));
+            send(new JoinResultMessage(false, nameValidation.getErrorMessage(), message.getRoomName(),
+                    message.getPlayerName(), false));
             return;
         }
         ValidationUtils.ValidationResult roomValidation = ValidationUtils.validateRoomName(message.getRoomName());
         if (!roomValidation.isValid()) {
-            send(new JoinResultMessage(false, roomValidation.getErrorMessage(), message.getRoomName(), message.getPlayerName(), false));
+            send(new JoinResultMessage(false, roomValidation.getErrorMessage(), message.getRoomName(),
+                    message.getPlayerName(), false));
             return;
         }
         Room targetRoom = server.getOrCreateRoom(message.getRoomName().trim(), null);
@@ -216,24 +255,37 @@ public class ClientHandler implements Runnable {
         }
         this.playerName = trimmedName;
         this.room = targetRoom;
+        if (networkStats != null) {
+            networkStats.setPlayerName(playerName);
+            networkStats.setCurrentRoomId(room.getName());
+        }
+        ServerNetworkStats serverStats = server.getNetworkStats();
+        if (serverStats != null) {
+            serverStats.updateClientPlayerName(clientId, playerName);
+            serverStats.updateClientRoom(clientId, room.getName());
+        }
         boolean spectator = targetRoom.isSpectator(playerName);
-        send(new JoinResultMessage(true, spectator ? "Joined as spectator" : "Joined", room.getName(), playerName, spectator));
+        send(new JoinResultMessage(true, spectator ? "Joined as spectator" : "Joined", room.getName(), playerName,
+                spectator));
         logger.info("Player " + playerName + " joined room " + room.getName());
         server.broadcastRoomList();
     }
 
     private RoomSettings sanitizeSettings(RoomSettings settings) {
         if (settings == null) {
-            return new RoomSettings(Constants.MAX_PLAYERS, Constants.ROUND_DURATION_SECONDS, Constants.DEFAULT_TOTAL_ROUNDS,
+            return new RoomSettings(Constants.MAX_PLAYERS, Constants.ROUND_DURATION_SECONDS,
+                    Constants.DEFAULT_TOTAL_ROUNDS,
                     false, null, true, Constants.CHOOSE_WORD_SECONDS, HintMode.NORMAL, WordDifficulty.MEDIUM);
         }
         int maxPlayers = Math.max(Constants.MIN_PLAYERS, Math.min(Constants.MAX_PLAYERS, settings.getMaxPlayers()));
-        int roundTime = Math.max(Constants.MIN_ROUND_SECONDS, Math.min(Constants.MAX_ROUND_SECONDS, settings.getRoundTimeSeconds()));
+        int roundTime = Math.max(Constants.MIN_ROUND_SECONDS,
+                Math.min(Constants.MAX_ROUND_SECONDS, settings.getRoundTimeSeconds()));
         int totalRounds = Math.max(1, Math.min(10, settings.getTotalRounds()));
         int wordChoiceSeconds = Math.max(Constants.MIN_WORD_CHOICE_SECONDS,
                 Math.min(Constants.MAX_WORD_CHOICE_SECONDS, settings.getWordChoiceSeconds()));
         HintMode hintMode = settings.getHintMode() == null ? HintMode.NORMAL : settings.getHintMode();
-        WordDifficulty difficulty = settings.getWordDifficulty() == null ? WordDifficulty.MEDIUM : settings.getWordDifficulty();
+        WordDifficulty difficulty = settings.getWordDifficulty() == null ? WordDifficulty.MEDIUM
+                : settings.getWordDifficulty();
         String roomCode = settings.getRoomCode();
         if (roomCode != null && roomCode.isBlank()) {
             roomCode = null;
@@ -326,11 +378,41 @@ public class ClientHandler implements Runnable {
         }
     }
 
+    private void handleMetricsSubscription(SubscribeMetricsMessage message) {
+        if (!server.isMonitoringEnabled()) {
+            send(new ErrorMessage("MONITORING_DISABLED", "Server monitoring is not enabled"));
+            return;
+        }
+
+        var broadcaster = server.getMonitorBroadcaster();
+        if (broadcaster == null) {
+            return;
+        }
+
+        // TODO: Add admin token validation here if needed
+        // For now, allow any client to subscribe (can be restricted later)
+
+        if (message.isSubscribe()) {
+            broadcaster.addSubscriber(this);
+            logger.info("Client " + clientId + " subscribed to metrics");
+        } else {
+            broadcaster.removeSubscriber(this);
+            logger.info("Client " + clientId + " unsubscribed from metrics");
+        }
+    }
+
     private void leaveRoom() {
         if (room != null && playerName != null) {
             room.removePlayer(playerName);
             server.removeRoomIfEmpty(room.getName());
             logger.info("Player " + playerName + " left room " + room.getName());
+            if (networkStats != null) {
+                networkStats.setCurrentRoomId(null);
+            }
+            ServerNetworkStats serverStats = server.getNetworkStats();
+            if (serverStats != null) {
+                serverStats.updateClientRoom(clientId, null);
+            }
             room = null;
         }
     }
@@ -339,6 +421,12 @@ public class ClientHandler implements Runnable {
         if (!running.getAndSet(false)) {
             return;
         }
+
+        // Unsubscribe from metrics if subscribed
+        if (server.isMonitoringEnabled() && server.getMonitorBroadcaster() != null) {
+            server.getMonitorBroadcaster().removeSubscriber(this);
+        }
+
         leaveRoom();
         server.unregisterClient(this);
         try {
@@ -350,6 +438,18 @@ public class ClientHandler implements Runnable {
 
     public String getPlayerName() {
         return playerName;
+    }
+
+    public String getClientId() {
+        return clientId;
+    }
+
+    public ClientNetworkStats getNetworkStats() {
+        return networkStats;
+    }
+
+    public String getCurrentRoomName() {
+        return room != null ? room.getName() : null;
     }
 
     public boolean isConnected() {
@@ -373,6 +473,76 @@ public class ClientHandler implements Runnable {
         }
         if (violations >= Constants.WARN_VIOLATIONS) {
             send(new ErrorMessage("WARN", "Please slow down (" + code + ")."));
+        }
+    }
+
+    // --- Network Monitoring Helpers ---
+
+    private void recordTx(Message message, int sizeBytes) {
+        String msgType = message.getClass().getSimpleName();
+        String roomName = getCurrentRoomName();
+        if (networkStats != null && roomName != null) {
+            networkStats.setCurrentRoomId(roomName);
+        }
+
+        ServerNetworkStats serverStats = server.getNetworkStats();
+        if (serverStats != null) {
+            serverStats.recordMessageSent(clientId, msgType, sizeBytes);
+        }
+    }
+
+    private void recordRx(Message message, int sizeBytes) {
+        String msgType = message.getClass().getSimpleName();
+        String roomName = getCurrentRoomName();
+        if (networkStats != null && roomName != null) {
+            networkStats.setCurrentRoomId(roomName);
+        }
+
+        ServerNetworkStats serverStats = server.getNetworkStats();
+        if (serverStats != null) {
+            serverStats.recordMessageReceived(clientId, msgType, sizeBytes, roomName);
+        }
+    }
+
+    /**
+     * Estimates the serialized size of a message.
+     * This is an approximation - for exact size, we'd need to serialize to a buffer
+     * first.
+     */
+    private int estimateMessageSize(Message message) {
+        if (message == null) {
+            return 0;
+        }
+
+        // Use a ByteArrayOutputStream to get actual serialized size
+        // This adds some overhead but gives accurate measurements
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                ObjectOutputStream oos = new ObjectOutputStream(baos)) {
+            oos.writeObject(message);
+            oos.flush();
+            return baos.size();
+        } catch (IOException e) {
+            // Fallback: estimate based on message type
+            return estimateMessageSizeFallback(message);
+        }
+    }
+
+    private int estimateMessageSizeFallback(Message message) {
+        // Base overhead for Java serialization
+        int base = 100;
+
+        if (message instanceof DrawMessage) {
+            return base + 200; // Draw messages have coordinates, color, etc.
+        } else if (message instanceof ChatMessage || message instanceof GuessMessage) {
+            return base + 100; // Text messages
+        } else if (message instanceof GameStateMessage) {
+            return base + 500; // State messages are larger
+        } else if (message instanceof StrokeHistoryMessage) {
+            return base + 2000; // History can be large
+        } else if (message instanceof ServerMetricsMessage) {
+            return base + 5000; // Metrics messages are large
+        } else {
+            return base + 50; // Default small message
         }
     }
 }
