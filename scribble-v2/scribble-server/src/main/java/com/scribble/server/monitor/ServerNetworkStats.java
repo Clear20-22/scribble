@@ -65,6 +65,8 @@ public final class ServerNetworkStats {
     private final LongAdder parseErrors = new LongAdder();
     private final LongAdder invalidPayloads = new LongAdder();
     private final LongAdder droppedMessages = new LongAdder();
+    private final LongAdder rateLimitedMessages = new LongAdder();
+    private final ConcurrentHashMap<String, LongAdder> rateLimitedByType = new ConcurrentHashMap<>();
 
     // Message size tracking
     private final LongAdder messageSizeSum = new LongAdder();
@@ -292,6 +294,15 @@ public final class ServerNetworkStats {
         ClientNetworkStats client = clientStats.get(clientId);
         if (client != null) {
             client.recordDroppedMessage();
+        }
+    }
+
+    public void recordRateLimited(String messageType) {
+        if (!enabled.get())
+            return;
+        rateLimitedMessages.increment();
+        if (messageType != null) {
+            rateLimitedByType.computeIfAbsent(messageType, k -> new LongAdder()).increment();
         }
     }
 
@@ -650,6 +661,16 @@ public final class ServerNetworkStats {
         return droppedMessages.sum();
     }
 
+    public long getRateLimitedMessages() {
+        return rateLimitedMessages.sum();
+    }
+
+    public Map<String, Long> getRateLimitedByType() {
+        Map<String, Long> result = new HashMap<>();
+        rateLimitedByType.forEach((k, v) -> result.put(k, v.sum()));
+        return result;
+    }
+
     public int getRoomCount() {
         return roomStats.size();
     }
@@ -710,6 +731,8 @@ public final class ServerNetworkStats {
                 getParseErrors(),
                 getInvalidPayloads(),
                 getDroppedMessages(),
+                getRateLimitedMessages(),
+                getRateLimitedByType(),
                 getRoomCount(),
                 getTopMessageTypes(10),
                 bytesPerSecIn.getValues(),
@@ -803,6 +826,8 @@ public final class ServerNetworkStats {
         public final long parseErrors;
         public final long invalidPayloads;
         public final long droppedMessages;
+        public final long rateLimitedMessages;
+        public final Map<String, Long> rateLimitedByType;
         public final int roomCount;
         public final List<MessageTypeStats> topMessageTypes;
         public final double[] bytesPerSecInHistory;
@@ -827,6 +852,7 @@ public final class ServerNetworkStats {
                 double bytesPerSecIn, double bytesPerSecOut, double msgsPerSec,
                 double avgMessageSize, int minMessageSize, int maxMessageSize,
                 long parseErrors, long invalidPayloads, long droppedMessages,
+                long rateLimitedMessages, Map<String, Long> rateLimitedByType,
                 int roomCount, List<MessageTypeStats> topMessageTypes,
                 double[] bytesPerSecInHistory, double[] bytesPerSecOutHistory,
                 double[] msgsPerSecHistory, double[] connectedClientsHistory,
@@ -856,6 +882,8 @@ public final class ServerNetworkStats {
             this.parseErrors = parseErrors;
             this.invalidPayloads = invalidPayloads;
             this.droppedMessages = droppedMessages;
+            this.rateLimitedMessages = rateLimitedMessages;
+            this.rateLimitedByType = rateLimitedByType;
             this.roomCount = roomCount;
             this.topMessageTypes = topMessageTypes;
             this.bytesPerSecInHistory = bytesPerSecInHistory;

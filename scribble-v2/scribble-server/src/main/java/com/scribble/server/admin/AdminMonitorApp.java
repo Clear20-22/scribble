@@ -4,6 +4,7 @@ import com.scribble.server.Server;
 import com.scribble.server.monitor.ClientNetworkStats;
 import com.scribble.server.monitor.RoomNetworkStats;
 import com.scribble.server.monitor.ServerNetworkStats;
+import com.scribble.utils.Constants;
 import com.scribble.utils.Logger;
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -19,7 +20,15 @@ import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.stage.Stage;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -56,6 +65,7 @@ public class AdminMonitorApp extends Application {
     private Label heapUsedLabel;
     private Label threadCountLabel;
     private Label errorsLabel;
+    private Label rateLimitedLabel;
 
     // Graphs - Overview tab (small)
     private Canvas throughputGraph;
@@ -67,11 +77,17 @@ public class AdminMonitorApp extends Application {
     private Canvas largeMemoryGraph;
     private Canvas largeCpuGraph;
     private Canvas largeMsgsGraph;
+    private Label rateLimitNoteLabel;
 
     // Tables
     private TableView<ClientInfoRow> clientsTable;
     private TableView<RoomInfoRow> roomsTable;
     private ListView<String> packetLogList;
+    private CheckBox controlFilterCheck;
+    private CheckBox gameplayFilterCheck;
+    private CheckBox broadcastFilterCheck;
+
+    private ServerNetworkStats.ServerStatsSnapshot lastSnapshot;
 
     public static void launchWithServer(Server serverInstance, int port) {
         server = serverInstance;
@@ -163,30 +179,55 @@ public class AdminMonitorApp extends Application {
         statsGrid.setVgap(15);
 
         // Row 1 - Connection stats
-        statsGrid.add(createStatCard("⏱ Uptime", uptimeLabel = createValueLabel("0s")), 0, 0);
-        statsGrid.add(createStatCard("👥 Connected", connectedClientsLabel = createValueLabel("0")), 1, 0);
-        statsGrid.add(createStatCard("✅ Total Connections", totalConnectionsLabel = createValueLabel("0")), 2, 0);
-        statsGrid.add(createStatCard("❌ Disconnects", totalDisconnectsLabel = createValueLabel("0")), 3, 0);
+        statsGrid.add(createStatCard("⏱ Uptime", uptimeLabel = createValueLabel("0s"),
+                "Availability window for connection/session stability."), 0, 0);
+        statsGrid.add(createStatCard("👥 Connected", connectedClientsLabel = createValueLabel("0"),
+                "Active connections (session management)."), 1, 0);
+        statsGrid.add(createStatCard("✅ Total Connections", totalConnectionsLabel = createValueLabel("0"),
+                "Connection establishment rate over time."), 2, 0);
+        statsGrid.add(createStatCard("❌ Disconnects", totalDisconnectsLabel = createValueLabel("0"),
+                "Connection teardown/timeout handling."), 3, 0);
 
         // Row 2 - Message stats
-        statsGrid.add(createStatCard("📤 Messages Sent", messagesSentLabel = createValueLabel("0")), 0, 1);
-        statsGrid.add(createStatCard("📥 Messages Received", messagesReceivedLabel = createValueLabel("0")), 1, 1);
-        statsGrid.add(createStatCard("📊 Bytes Sent", bytesSentLabel = createValueLabel("0 B")), 2, 1);
-        statsGrid.add(createStatCard("📊 Bytes Received", bytesReceivedLabel = createValueLabel("0 B")), 3, 1);
+        statsGrid.add(createStatCard("📤 Messages Sent", messagesSentLabel = createValueLabel("0"),
+                "Application-layer delivery volume (reliable transport)."), 0, 1);
+        statsGrid.add(createStatCard("📥 Messages Received", messagesReceivedLabel = createValueLabel("0"),
+                "Application-layer delivery volume (reliable transport)."), 1, 1);
+        statsGrid.add(createStatCard("📊 Bytes Sent", bytesSentLabel = createValueLabel("0 B"),
+                "Outbound throughput utilization."), 2, 1);
+        statsGrid.add(createStatCard("📊 Bytes Received", bytesReceivedLabel = createValueLabel("0 B"),
+                "Inbound throughput utilization."), 3, 1);
 
         // Row 3 - Throughput
-        statsGrid.add(createStatCard("⬆ TX Rate", throughputOutLabel = createValueLabel("0 B/s")), 0, 2);
-        statsGrid.add(createStatCard("⬇ RX Rate", throughputInLabel = createValueLabel("0 B/s")), 1, 2);
-        statsGrid.add(createStatCard("💬 Msgs/sec", msgsPerSecLabel = createValueLabel("0")), 2, 2);
-        statsGrid.add(createStatCard("🏠 Rooms", roomCountLabel = createValueLabel("0")), 3, 2);
+        statsGrid.add(createStatCard("⬆ TX Rate", throughputOutLabel = createValueLabel("0 B/s"),
+                "Throughput & application-level flow control (egress)."), 0, 2);
+        statsGrid.add(createStatCard("⬇ RX Rate", throughputInLabel = createValueLabel("0 B/s"),
+                "Throughput & application-level flow control (ingress)."), 1, 2);
+        statsGrid.add(createStatCard("💬 Msgs/sec", msgsPerSecLabel = createValueLabel("0"),
+                "Throughput & application-level flow control."), 2, 2);
+        statsGrid.add(createStatCard("🏠 Rooms", roomCountLabel = createValueLabel("0"),
+                "Concurrent rooms and fan-out domains."), 3, 2);
 
         // Row 4 - System stats
-        statsGrid.add(createStatCard("🔥 CPU Load", cpuLoadLabel = createValueLabel("0%")), 0, 3);
-        statsGrid.add(createStatCard("💾 Heap Used", heapUsedLabel = createValueLabel("0 MB")), 1, 3);
-        statsGrid.add(createStatCard("🧵 Threads", threadCountLabel = createValueLabel("0")), 2, 3);
-        statsGrid.add(createStatCard("⚠ Errors", errorsLabel = createValueLabel("0")), 3, 3);
+        statsGrid.add(createStatCard("🔥 CPU Load", cpuLoadLabel = createValueLabel("0%"),
+                "System resource pressure affecting networking throughput."), 0, 3);
+        statsGrid.add(createStatCard("💾 Heap Used", heapUsedLabel = createValueLabel("0 MB"),
+                "Memory pressure affecting buffering and throughput."), 1, 3);
+        statsGrid.add(createStatCard("🧵 Threads", threadCountLabel = createValueLabel("0"),
+                "Concurrency capacity for I/O handling."), 2, 3);
+        statsGrid.add(createStatCard("⚠ Errors", errorsLabel = createValueLabel("0"),
+                rateLimitedLabel = createSecondaryLabel("Rate limited: 0"),
+                "Protocol validation and flow-control enforcement."), 3, 3);
 
         pane.getChildren().add(statsGrid);
+
+        HBox exportRow = new HBox();
+        exportRow.setAlignment(Pos.CENTER_RIGHT);
+        exportRow.setPadding(new Insets(10, 0, 0, 0));
+        Button exportButton = new Button("Export Snapshot");
+        exportButton.setOnAction(e -> exportSnapshot());
+        exportRow.getChildren().add(exportButton);
+        pane.getChildren().add(exportRow);
 
         // Mini graphs section
         HBox graphsRow = new HBox(15);
@@ -206,7 +247,11 @@ public class AdminMonitorApp extends Application {
         return pane;
     }
 
-    private VBox createStatCard(String title, Label valueLabel) {
+    private VBox createStatCard(String title, Label valueLabel, String tooltipText) {
+        return createStatCard(title, valueLabel, null, tooltipText);
+    }
+
+    private VBox createStatCard(String title, Label valueLabel, Label secondaryLabel, String tooltipText) {
         VBox card = new VBox(5);
         card.setPadding(new Insets(15));
         card.setMinWidth(200);
@@ -216,7 +261,14 @@ public class AdminMonitorApp extends Application {
         titleLabel.setFont(Font.font("System", 12));
         titleLabel.setTextFill(Color.LIGHTGRAY);
 
-        card.getChildren().addAll(titleLabel, valueLabel);
+        if (tooltipText != null && !tooltipText.isBlank()) {
+            Tooltip.install(card, new Tooltip(tooltipText));
+        }
+        if (secondaryLabel != null) {
+            card.getChildren().addAll(titleLabel, valueLabel, secondaryLabel);
+        } else {
+            card.getChildren().addAll(titleLabel, valueLabel);
+        }
         return card;
     }
 
@@ -224,6 +276,13 @@ public class AdminMonitorApp extends Application {
         Label label = new Label(initial);
         label.setFont(Font.font("System", FontWeight.BOLD, 20));
         label.setTextFill(Color.WHITE);
+        return label;
+    }
+
+    private Label createSecondaryLabel(String initial) {
+        Label label = new Label(initial);
+        label.setFont(Font.font("System", 11));
+        label.setTextFill(Color.LIGHTGRAY);
         return label;
     }
 
@@ -281,9 +340,9 @@ public class AdminMonitorApp extends Application {
                 data -> new javafx.beans.property.SimpleStringProperty(data.getValue().messagesReceived));
         recvCol.setCellFactory(col -> createCenteredCell());
 
-        TableColumn<ClientInfoRow, String> rttCol = new TableColumn<>("RTT");
+        TableColumn<ClientInfoRow, String> rttCol = new TableColumn<>("RTT (avg)");
         rttCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().rtt));
-        rttCol.setCellFactory(col -> createCenteredCell());
+        rttCol.setCellFactory(col -> createRttCell());
 
         TableColumn<ClientInfoRow, String> durationCol = new TableColumn<>("Duration");
         durationCol
@@ -339,11 +398,21 @@ public class AdminMonitorApp extends Application {
                 data -> new javafx.beans.property.SimpleStringProperty(data.getValue().broadcasts));
         broadcastCol.setCellFactory(col -> createCenteredCell());
 
+        TableColumn<RoomInfoRow, String> fanoutCol = new TableColumn<>("Fan-out/Player");
+        fanoutCol.setCellValueFactory(
+                data -> new javafx.beans.property.SimpleStringProperty(data.getValue().fanoutPerPlayer));
+        fanoutCol.setCellFactory(col -> createCenteredCell());
+        Label fanoutLabel = new Label("Fan-out/Player");
+        fanoutLabel.setTextFill(Color.LIGHTGRAY);
+        fanoutLabel.setTooltip(new Tooltip("App-layer multicast cost per player."));
+        fanoutCol.setGraphic(fanoutLabel);
+
         TableColumn<RoomInfoRow, String> uptimeCol = new TableColumn<>("Uptime");
         uptimeCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().uptime));
         uptimeCol.setCellFactory(col -> createCenteredCell());
 
-        roomsTable.getColumns().addAll(nameCol, playersCol, roundsCol, drawsCol, guessesCol, broadcastCol, uptimeCol);
+        roomsTable.getColumns().addAll(nameCol, playersCol, roundsCol, drawsCol, guessesCol, broadcastCol,
+                fanoutCol, uptimeCol);
 
         VBox.setVgrow(roomsTable, Priority.ALWAYS);
         pane.getChildren().addAll(title, roomsTable);
@@ -359,11 +428,26 @@ public class AdminMonitorApp extends Application {
         title.setFont(Font.font("System", FontWeight.BOLD, 18));
         title.setTextFill(Color.WHITE);
 
+        HBox filtersRow = new HBox(10);
+        filtersRow.setAlignment(Pos.CENTER_LEFT);
+        controlFilterCheck = new CheckBox("Control");
+        gameplayFilterCheck = new CheckBox("Gameplay");
+        broadcastFilterCheck = new CheckBox("Broadcast");
+        controlFilterCheck.setSelected(true);
+        gameplayFilterCheck.setSelected(true);
+        broadcastFilterCheck.setSelected(true);
+        controlFilterCheck.setTextFill(Color.LIGHTGRAY);
+        gameplayFilterCheck.setTextFill(Color.LIGHTGRAY);
+        broadcastFilterCheck.setTextFill(Color.LIGHTGRAY);
+        Label filtersLabel = new Label("Filters:");
+        filtersLabel.setTextFill(Color.LIGHTGRAY);
+        filtersRow.getChildren().addAll(filtersLabel, controlFilterCheck, gameplayFilterCheck, broadcastFilterCheck);
+
         packetLogList = new ListView<>();
         packetLogList.setStyle("-fx-background-color: #16213e; -fx-control-inner-background: #16213e;");
 
         VBox.setVgrow(packetLogList, Priority.ALWAYS);
-        pane.getChildren().addAll(title, packetLogList);
+        pane.getChildren().addAll(title, filtersRow, packetLogList);
         return pane;
     }
 
@@ -388,9 +472,17 @@ public class AdminMonitorApp extends Application {
                 createGraphCard("CPU Load (%)", largeCpuGraph),
                 createGraphCard("JVM Heap Memory (MB)", largeMemoryGraph));
 
+        rateLimitNoteLabel = new Label(buildRateLimitNote());
+        rateLimitNoteLabel.setTextFill(Color.LIGHTGRAY);
+        rateLimitNoteLabel.setFont(Font.font("System", 11));
+
+        VBox msgsGraphBox = new VBox(6,
+                createGraphCard("Messages per Second", largeMsgsGraph),
+                rateLimitNoteLabel);
+
         pane.getChildren().addAll(title,
                 createGraphCard("Network Throughput (bytes/sec) - Cyan=IN, Magenta=OUT", largeThroughputGraph),
-                createGraphCard("Messages per Second", largeMsgsGraph),
+                msgsGraphBox,
                 systemRow);
         return pane;
     }
@@ -426,6 +518,7 @@ public class AdminMonitorApp extends Application {
             return;
 
         ServerNetworkStats.ServerStatsSnapshot snapshot = stats.toSnapshot();
+        lastSnapshot = snapshot;
 
         // Update overview stats
         uptimeLabel.setText(formatDuration(snapshot.serverUptime));
@@ -449,6 +542,7 @@ public class AdminMonitorApp extends Application {
         heapUsedLabel.setText(String.format("%.0f MB", snapshot.heapUsedMb));
         threadCountLabel.setText(String.valueOf(snapshot.threadCount));
         errorsLabel.setText(String.valueOf(snapshot.parseErrors + snapshot.invalidPayloads));
+        rateLimitedLabel.setText(buildRateLimitedSummary(snapshot));
 
         // Update graphs - Overview tab
         drawThroughputGraph(snapshot);
@@ -845,6 +939,7 @@ public class AdminMonitorApp extends Application {
             var cs = entry.getValue();
             if (cs.connected) {
                 String shortId = cs.clientId.length() > 8 ? cs.clientId.substring(0, 8) + "..." : cs.clientId;
+                String avgRtt = cs.avgRtt > 0 ? String.format("%.1f ms", cs.avgRtt) : "-";
                 clientsTable.getItems().add(new ClientInfoRow(
                         shortId,
                         cs.remoteAddress + ":" + cs.remotePort,
@@ -852,8 +947,11 @@ public class AdminMonitorApp extends Application {
                         cs.currentRoomId != null ? cs.currentRoomId : "-",
                         formatNumber(cs.messagesSent),
                         formatNumber(cs.messagesReceived),
-                        cs.lastRtt + " ms",
-                        formatDuration(cs.sessionDurationMs)));
+                        avgRtt,
+                        formatDuration(cs.sessionDurationMs),
+                        cs.lastRtt,
+                        cs.minRtt,
+                        cs.maxRtt));
             }
         }
     }
@@ -862,6 +960,8 @@ public class AdminMonitorApp extends Application {
         roomsTable.getItems().clear();
         for (var entry : roomStats.entrySet()) {
             var rs = entry.getValue();
+            int playerCount = Math.max(1, rs.currentPlayerCount);
+            double fanout = rs.messagesBroadcast / (double) playerCount;
             roomsTable.getItems().add(new RoomInfoRow(
                     rs.roomId,
                     String.valueOf(rs.currentPlayerCount),
@@ -869,6 +969,7 @@ public class AdminMonitorApp extends Application {
                     formatNumber(rs.drawMessages),
                     rs.correctGuesses + "/" + rs.guessAttempts,
                     formatNumber(rs.messagesBroadcast),
+                    String.format("%.2f", fanout),
                     formatDuration(rs.uptime)));
         }
     }
@@ -878,6 +979,9 @@ public class AdminMonitorApp extends Application {
         packetLogList.getItems().clear();
         int count = 0;
         for (var packet : packets) {
+            if (!passesPacketFilter(packet)) {
+                continue;
+            }
             if (count++ >= 100)
                 break;
 
@@ -906,6 +1010,34 @@ public class AdminMonitorApp extends Application {
                     setText(item);
                     setAlignment(Pos.CENTER);
                 }
+            }
+        };
+    }
+
+    private TableCell<ClientInfoRow, String> createRttCell() {
+        return new TableCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setTooltip(null);
+                    return;
+                }
+                setText(item);
+                setAlignment(Pos.CENTER);
+                ClientInfoRow row = getTableRow() != null ? getTableRow().getItem() : null;
+                if (row == null) {
+                    setTooltip(null);
+                    return;
+                }
+                if (row.lastRtt <= 0 && row.minRtt <= 0 && row.maxRtt <= 0) {
+                    setTooltip(new Tooltip("No RTT samples yet."));
+                    return;
+                }
+                String tooltipText = String.format("Last: %d ms\nMin: %.1f ms\nMax: %.1f ms",
+                        row.lastRtt, row.minRtt, row.maxRtt);
+                setTooltip(new Tooltip(tooltipText));
             }
         };
     }
@@ -948,6 +1080,106 @@ public class AdminMonitorApp extends Application {
                         "-fx-font-family: 'System';");
     }
 
+    private String buildRateLimitedSummary(ServerNetworkStats.ServerStatsSnapshot snapshot) {
+        if (snapshot == null) {
+            return "Rate limited: 0";
+        }
+        Map<String, Long> byType = snapshot.rateLimitedByType != null
+                ? snapshot.rateLimitedByType
+                : java.util.Collections.emptyMap();
+        long total = snapshot.rateLimitedMessages;
+        long draw = byType.getOrDefault("DrawMessage", 0L);
+        long chat = byType.getOrDefault("ChatMessage", 0L);
+        long guess = byType.getOrDefault("GuessMessage", 0L);
+        return String.format("Rate limited: %d (draw %d, chat %d, guess %d)", total, draw, chat, guess);
+    }
+
+    private boolean passesPacketFilter(com.scribble.server.monitor.PacketLogEntry packet) {
+        boolean controlOn = controlFilterCheck == null || controlFilterCheck.isSelected();
+        boolean gameplayOn = gameplayFilterCheck == null || gameplayFilterCheck.isSelected();
+        boolean broadcastOn = broadcastFilterCheck == null || broadcastFilterCheck.isSelected();
+        if (!controlOn && !gameplayOn && !broadcastOn) {
+            return true;
+        }
+        String type = packet.getMessageType();
+        boolean isBroadcast = packet.getRecipientCount() != null && packet.getRecipientCount() > 1;
+        if (isBroadcast) {
+            return broadcastOn;
+        }
+        if (controlOn && isControlMessage(type)) {
+            return true;
+        }
+        return gameplayOn && isGameplayMessage(type);
+    }
+
+    private boolean isControlMessage(String messageType) {
+        if (messageType == null) {
+            return false;
+        }
+        return CONTROL_MESSAGE_TYPES.contains(messageType);
+    }
+
+    private boolean isGameplayMessage(String messageType) {
+        if (messageType == null) {
+            return false;
+        }
+        return GAMEPLAY_MESSAGE_TYPES.contains(messageType);
+    }
+
+    private String buildRateLimitNote() {
+        double drawMax = 1000.0 / Constants.DRAW_RATE_LIMIT_MS;
+        return String.format("Max allowed: %.1f msgs/sec per client (draw throttle).", drawMax);
+    }
+
+    private void exportSnapshot() {
+        ServerNetworkStats.ServerStatsSnapshot snapshot = lastSnapshot;
+        if (snapshot == null) {
+            return;
+        }
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        File outFile = new File("scribble-monitor-snapshot-" + timestamp + ".csv");
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(outFile))) {
+            writer.write("timestamp,uptime_ms,connected,total_connections,disconnects,msgs_per_sec,tx_rate_bps,rx_rate_bps,bytes_sent,bytes_received,avg_rtt_ms,rate_limited,rooms,cpu_load,heap_mb\n");
+            double avgRtt = computeAvgRtt(snapshot);
+            writer.write(String.format("%s,%d,%d,%d,%d,%.2f,%.2f,%.2f,%d,%d,%.2f,%d,%d,%.2f,%.2f\n",
+                    timestamp,
+                    snapshot.serverUptime,
+                    snapshot.currentConnectedClients,
+                    snapshot.totalConnectionsAccepted,
+                    snapshot.totalDisconnects,
+                    snapshot.msgsPerSec,
+                    snapshot.bytesPerSecOut,
+                    snapshot.bytesPerSecIn,
+                    snapshot.totalBytesSent,
+                    snapshot.totalBytesReceived,
+                    avgRtt,
+                    snapshot.rateLimitedMessages,
+                    snapshot.roomCount,
+                    snapshot.cpuLoadHistory.length > 0
+                            ? snapshot.cpuLoadHistory[snapshot.cpuLoadHistory.length - 1]
+                            : 0,
+                    snapshot.heapUsedMb));
+            logger.info("Exported monitor snapshot to " + outFile.getAbsolutePath());
+        } catch (IOException e) {
+            logger.error("Failed to export snapshot", e);
+        }
+    }
+
+    private double computeAvgRtt(ServerNetworkStats.ServerStatsSnapshot snapshot) {
+        if (snapshot == null || snapshot.clientStats.isEmpty()) {
+            return 0;
+        }
+        double sum = 0;
+        int count = 0;
+        for (ClientNetworkStats.ClientStatsSnapshot client : snapshot.clientStats.values()) {
+            if (client.avgRtt > 0) {
+                sum += client.avgRtt;
+                count++;
+            }
+        }
+        return count > 0 ? sum / count : 0;
+    }
+
     private void shutdown() {
         if (updateScheduler != null) {
             updateScheduler.shutdownNow();
@@ -959,9 +1191,13 @@ public class AdminMonitorApp extends Application {
     public static class ClientInfoRow {
         public final String clientId, ipAddress, playerName, roomName;
         public final String messagesSent, messagesReceived, rtt, duration;
+        public final long lastRtt;
+        public final double minRtt;
+        public final double maxRtt;
 
         public ClientInfoRow(String clientId, String ipAddress, String playerName, String roomName,
-                String messagesSent, String messagesReceived, String rtt, String duration) {
+                String messagesSent, String messagesReceived, String rtt, String duration,
+                long lastRtt, double minRtt, double maxRtt) {
             this.clientId = clientId;
             this.ipAddress = ipAddress;
             this.playerName = playerName;
@@ -970,21 +1206,58 @@ public class AdminMonitorApp extends Application {
             this.messagesReceived = messagesReceived;
             this.rtt = rtt;
             this.duration = duration;
+            this.lastRtt = lastRtt;
+            this.minRtt = minRtt;
+            this.maxRtt = maxRtt;
         }
     }
 
     public static class RoomInfoRow {
-        public final String roomName, playerCount, roundsPlayed, drawEvents, guesses, broadcasts, uptime;
+        public final String roomName, playerCount, roundsPlayed, drawEvents, guesses, broadcasts, fanoutPerPlayer, uptime;
 
         public RoomInfoRow(String roomName, String playerCount, String roundsPlayed,
-                String drawEvents, String guesses, String broadcasts, String uptime) {
+                String drawEvents, String guesses, String broadcasts, String fanoutPerPlayer, String uptime) {
             this.roomName = roomName;
             this.playerCount = playerCount;
             this.roundsPlayed = roundsPlayed;
             this.drawEvents = drawEvents;
             this.guesses = guesses;
             this.broadcasts = broadcasts;
+            this.fanoutPerPlayer = fanoutPerPlayer;
             this.uptime = uptime;
         }
+    }
+
+    private static final Set<String> CONTROL_MESSAGE_TYPES = new HashSet<>();
+    private static final Set<String> GAMEPLAY_MESSAGE_TYPES = new HashSet<>();
+
+    static {
+        CONTROL_MESSAGE_TYPES.add("PingMessage");
+        CONTROL_MESSAGE_TYPES.add("PongMessage");
+        CONTROL_MESSAGE_TYPES.add("JoinMessage");
+        CONTROL_MESSAGE_TYPES.add("JoinResultMessage");
+        CONTROL_MESSAGE_TYPES.add("LeaveRoomMessage");
+        CONTROL_MESSAGE_TYPES.add("CreateRoomMessage");
+        CONTROL_MESSAGE_TYPES.add("ListRoomsMessage");
+        CONTROL_MESSAGE_TYPES.add("RoomListMessage");
+        CONTROL_MESSAGE_TYPES.add("RequestStateMessage");
+        CONTROL_MESSAGE_TYPES.add("RequestStrokeHistoryMessage");
+        CONTROL_MESSAGE_TYPES.add("SubscribeMetricsMessage");
+        CONTROL_MESSAGE_TYPES.add("ServerMetricsMessage");
+        CONTROL_MESSAGE_TYPES.add("PlayAgainRequestMessage");
+        CONTROL_MESSAGE_TYPES.add("PlayAgainStatusMessage");
+
+        GAMEPLAY_MESSAGE_TYPES.add("DrawMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("StrokeHistoryMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("UndoMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("ClearMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("GuessMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("ChatMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("GuessHintMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("GameStateMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("WordChoicesMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("ChooseWordMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("WordChosenMessage");
+        GAMEPLAY_MESSAGE_TYPES.add("PlayerListMessage");
     }
 }

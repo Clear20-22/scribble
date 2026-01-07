@@ -312,6 +312,7 @@ public class ClientHandler implements Runnable {
         }
         long now = System.currentTimeMillis();
         if (now - lastDrawAt < Constants.DRAW_RATE_LIMIT_MS) {
+            recordRateLimited("DrawMessage");
             return;
         }
         lastDrawAt = now;
@@ -351,6 +352,7 @@ public class ClientHandler implements Runnable {
         }
         long now = System.currentTimeMillis();
         if (now - lastChatAt < Constants.CHAT_RATE_LIMIT_MS) {
+            recordRateLimited("ChatMessage");
             send(new ErrorMessage("CHAT_RATE", "You are sending messages too quickly."));
             registerViolation("CHAT_RATE");
             return;
@@ -368,6 +370,7 @@ public class ClientHandler implements Runnable {
         }
         long now = System.currentTimeMillis();
         if (now - lastGuessAt < Constants.GUESS_RATE_LIMIT_MS) {
+            recordRateLimited("GuessMessage");
             send(new ErrorMessage("GUESS_RATE", "Guessing too fast."));
             registerViolation("GUESS_RATE");
             return;
@@ -512,6 +515,13 @@ public class ClientHandler implements Runnable {
         ServerNetworkStats serverStats = server.getNetworkStats();
         if (serverStats != null) {
             serverStats.recordMessageReceived(clientId, msgType, sizeBytes, roomName);
+        }
+    }
+
+    private void recordRateLimited(String messageType) {
+        ServerNetworkStats serverStats = server.getNetworkStats();
+        if (serverStats != null) {
+            serverStats.recordRateLimited(messageType);
         }
     }
 
