@@ -442,9 +442,10 @@ public class AdminMonitorApp extends Application {
         roomCountLabel.setText(String.valueOf(snapshot.roomCount));
 
         // System stats
-        cpuLoadLabel.setText(String.format("%.1f%%",
-                snapshot.gcStats.totalTimeMs > 0 ? (snapshot.gcStats.totalTimeMs / (double) snapshot.serverUptime * 100)
-                        : 0));
+        double cpuLoad = snapshot.cpuLoadHistory.length > 0
+                ? snapshot.cpuLoadHistory[snapshot.cpuLoadHistory.length - 1]
+                : 0;
+        cpuLoadLabel.setText(String.format("%.1f%%", cpuLoad));
         heapUsedLabel.setText(String.format("%.0f MB", snapshot.heapUsedMb));
         threadCountLabel.setText(String.valueOf(snapshot.threadCount));
         errorsLabel.setText(String.valueOf(snapshot.parseErrors + snapshot.invalidPayloads));
@@ -557,23 +558,41 @@ public class AdminMonitorApp extends Application {
         gc.fillRect(0, 0, w, h);
 
         double[] heapData = snapshot.heapUsedMbHistory;
-        if (heapData.length < 2)
+        double[] cpuData = snapshot.cpuLoadHistory;
+        if (heapData.length < 2 && cpuData.length < 2)
             return;
 
         double maxVal = snapshot.heapMaxMb > 0 ? snapshot.heapMaxMb : 1;
 
         gc.setStroke(Color.ORANGE);
         gc.setLineWidth(2);
-        gc.beginPath();
-        for (int i = 0; i < heapData.length; i++) {
-            double x = (i / (double) (heapData.length - 1)) * w;
-            double y = h - (heapData[i] / maxVal) * (h - 10);
-            if (i == 0)
-                gc.moveTo(x, y);
-            else
-                gc.lineTo(x, y);
+        if (heapData.length >= 2) {
+            gc.beginPath();
+            for (int i = 0; i < heapData.length; i++) {
+                double x = (i / (double) (heapData.length - 1)) * w;
+                double y = h - (heapData[i] / maxVal) * (h - 10);
+                if (i == 0)
+                    gc.moveTo(x, y);
+                else
+                    gc.lineTo(x, y);
+            }
+            gc.stroke();
         }
-        gc.stroke();
+
+        if (cpuData.length >= 2) {
+            gc.setStroke(Color.LIGHTGREEN);
+            gc.setLineWidth(2);
+            gc.beginPath();
+            for (int i = 0; i < cpuData.length; i++) {
+                double x = (i / (double) (cpuData.length - 1)) * w;
+                double y = h - (cpuData[i] / 100.0) * (h - 10);
+                if (i == 0)
+                    gc.moveTo(x, y);
+                else
+                    gc.lineTo(x, y);
+            }
+            gc.stroke();
+        }
     }
 
     // ===== LARGE GRAPHS FOR GRAPHS TAB =====
@@ -862,36 +881,15 @@ public class AdminMonitorApp extends Application {
             if (count++ >= 100)
                 break;
 
-            // Get client info
-            String clientIdShort = "?";
-            String playerName = "?";
-            if (packet.getClientId() != null) {
-                String id = packet.getClientId();
-                clientIdShort = id.length() > 8 ? id.substring(0, 8) : id;
-
-                // Get player name from client stats
-                var clientStats = stats.getClientStats(packet.getClientId());
-                if (clientStats != null && clientStats.getPlayerName() != null) {
-                    playerName = clientStats.getPlayerName();
-                }
-            }
-
-            // Get room info
-            String roomInfo = packet.getRoomId() != null ? packet.getRoomId() : "null";
-
-            // Direction indicator and label
-            boolean isTx = packet.getDirection() == com.scribble.server.monitor.PacketLogEntry.Direction.TX;
-            String dirSymbol = isTx ? "→ OUT" : "← IN ";
-
-            // Format: [TIME] DIRECTION MessageType (size) | Player: name | Client: id |
-            // Room: room
-            String entry = String.format("[%s] %s  %-25s (%4d B) │ Player: %-10s │ Client: %s │ Room: %s",
+            String roomInfo = packet.getRoomId() != null ? packet.getRoomId() : "-";
+            String src = packet.getSrc() != null ? packet.getSrc() : "unknown";
+            String dst = packet.getDst() != null ? packet.getDst() : "unknown";
+            String entry = String.format("[%s] %s -> %s : %-25s (%4d B) │ Room: %s",
                     new java.text.SimpleDateFormat("HH:mm:ss.SSS").format(packet.getTimestamp()),
-                    dirSymbol,
+                    src,
+                    dst,
                     packet.getMessageType(),
                     packet.getSizeBytes(),
-                    playerName,
-                    clientIdShort,
                     roomInfo);
             packetLogList.getItems().add(entry);
         }

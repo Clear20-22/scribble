@@ -35,7 +35,7 @@ Ensure you have the project files in a directory.
 Open a terminal in the `scribble-v2` directory and run:
 
 ```bash
-./gradlew clean build
+
 ```
 
 This will compile all modules and download necessary dependencies.

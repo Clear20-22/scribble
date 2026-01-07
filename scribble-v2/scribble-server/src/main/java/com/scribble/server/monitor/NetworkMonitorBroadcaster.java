@@ -107,7 +107,10 @@ public final class NetworkMonitorBroadcaster implements ServerNetworkStats.Admin
                         p.getMessageType(),
                         p.getSizeBytes(),
                         p.getClientId(),
-                        p.getRoomId()))
+                        p.getRoomId(),
+                        p.getSrc(),
+                        p.getDst(),
+                        p.getRecipientCount()))
                 .collect(Collectors.toList());
 
         return new ServerMetricsMessage(

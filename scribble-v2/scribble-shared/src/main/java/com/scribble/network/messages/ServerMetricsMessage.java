@@ -405,15 +405,22 @@ public final class ServerMetricsMessage implements Message {
         public final int sizeBytes;
         public final String clientId;
         public final String roomId;
+        public final String src;
+        public final String dst;
+        public final Integer recipientCount;
 
         public PacketInfo(long timestamp, String direction, String messageType,
-                int sizeBytes, String clientId, String roomId) {
+                int sizeBytes, String clientId, String roomId,
+                String src, String dst, Integer recipientCount) {
             this.timestamp = timestamp;
             this.direction = direction;
             this.messageType = messageType;
             this.sizeBytes = sizeBytes;
             this.clientId = clientId;
             this.roomId = roomId;
+            this.src = src;
+            this.dst = dst;
+            this.recipientCount = recipientCount;
         }
     }
 }

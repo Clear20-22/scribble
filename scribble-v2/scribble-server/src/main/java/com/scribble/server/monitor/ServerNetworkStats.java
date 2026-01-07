@@ -210,6 +210,10 @@ public final class ServerNetworkStats {
     }
 
     public void recordMessageSent(String clientId, String messageType, int bytes) {
+        recordMessageSent(clientId, messageType, bytes, null);
+    }
+
+    public void recordMessageSent(String clientId, String messageType, int bytes, String roomId) {
         if (!enabled.get())
             return;
         totalMessagesSent.increment();
@@ -222,8 +226,8 @@ public final class ServerNetworkStats {
             client.recordMessageSent(messageType, bytes);
         }
 
-        logPacketGlobal(PacketLogEntry.Direction.TX, messageType, bytes, clientId,
-                client != null ? client.getCurrentRoomId() : null);
+        String resolvedRoomId = roomId != null ? roomId : (client != null ? client.getCurrentRoomId() : null);
+        logPacketGlobal(PacketLogEntry.Direction.TX, messageType, bytes, clientId, resolvedRoomId, null);
     }
 
     public void recordMessageReceived(String clientId, String messageType, int bytes, String roomId) {
@@ -247,7 +251,7 @@ public final class ServerNetworkStats {
             }
         }
 
-        logPacketGlobal(PacketLogEntry.Direction.RX, messageType, bytes, clientId, roomId);
+        logPacketGlobal(PacketLogEntry.Direction.RX, messageType, bytes, clientId, roomId, null);
     }
 
     public void recordRoomBroadcast(String roomId, int recipientCount, int bytesPerRecipient) {
@@ -257,6 +261,12 @@ public final class ServerNetworkStats {
         if (room != null) {
             room.recordBroadcast(recipientCount, recipientCount * bytesPerRecipient);
         }
+    }
+
+    public void recordBroadcastPacket(String roomId, String messageType, int recipientCount, int totalBytes) {
+        if (!enabled.get())
+            return;
+        logPacketGlobal(PacketLogEntry.Direction.TX, messageType, totalBytes, null, roomId, recipientCount);
     }
 
     public void recordParseError(String clientId) {
@@ -340,13 +350,54 @@ public final class ServerNetworkStats {
     }
 
     private void logPacketGlobal(PacketLogEntry.Direction direction, String messageType,
-            int bytes, String clientId, String roomId) {
+            int bytes, String clientId, String roomId, Integer recipientCount) {
+        String src = resolveSrc(direction, clientId);
+        String dst = resolveDst(direction, clientId, roomId, recipientCount);
         PacketLogEntry entry = new PacketLogEntry(
-                System.currentTimeMillis(), direction, messageType, bytes, clientId, roomId);
+                System.currentTimeMillis(), direction, messageType, bytes, clientId, roomId, src, dst, recipientCount);
         globalPacketLog.addFirst(entry);
         while (globalPacketLog.size() > MAX_GLOBAL_PACKET_LOG) {
             globalPacketLog.pollLast();
         }
+    }
+
+    private String resolveSrc(PacketLogEntry.Direction direction, String clientId) {
+        if (direction == PacketLogEntry.Direction.RX) {
+            return formatClientEndpoint(clientId);
+        }
+        return "SERVER";
+    }
+
+    private String resolveDst(PacketLogEntry.Direction direction, String clientId, String roomId,
+            Integer recipientCount) {
+        if (direction == PacketLogEntry.Direction.RX) {
+            return "SERVER";
+        }
+        if (roomId != null && recipientCount != null && recipientCount > 0) {
+            return String.format("room:%s (%d recipients)", roomId, recipientCount);
+        }
+        return formatClientEndpoint(clientId);
+    }
+
+    private String formatClientEndpoint(String clientId) {
+        if (clientId == null) {
+            return "unknown-client";
+        }
+        ClientNetworkStats client = clientStats.get(clientId);
+        if (client == null) {
+            return shortClientId(clientId);
+        }
+        String playerName = client.getPlayerName();
+        String address = client.getRemoteAddress() + ":" + client.getRemotePort();
+        String id = shortClientId(clientId);
+        if (playerName == null || playerName.isBlank()) {
+            return String.format("%s@%s", id, address);
+        }
+        return String.format("%s (%s@%s)", playerName, id, address);
+    }
+
+    private String shortClientId(String clientId) {
+        return clientId.length() > 8 ? clientId.substring(0, 8) : clientId;
     }
 
     // --- Room management ---
@@ -456,10 +507,7 @@ public final class ServerNetworkStats {
 
     private void recordJvmMetrics() {
         // CPU load
-        double cpuLoad = osBean.getSystemLoadAverage();
-        if (cpuLoad >= 0) {
-            cpuLoadHistory.add(cpuLoad);
-        }
+        cpuLoadHistory.add(readCpuLoadPercent());
 
         // Heap usage
         long heapUsed = memoryBean.getHeapMemoryUsage().getUsed();
@@ -473,6 +521,27 @@ public final class ServerNetworkStats {
         currentConnectedClients = (int) clientStats.values().stream()
                 .filter(ClientNetworkStats::isConnected)
                 .count();
+    }
+
+    private double readCpuLoadPercent() {
+        if (osBean instanceof com.sun.management.OperatingSystemMXBean sunBean) {
+            double processLoad = sunBean.getProcessCpuLoad();
+            if (processLoad >= 0) {
+                return processLoad * 100.0;
+            }
+            double systemLoad = sunBean.getSystemCpuLoad();
+            if (systemLoad >= 0) {
+                return systemLoad * 100.0;
+            }
+        }
+        double systemLoadAverage = osBean.getSystemLoadAverage();
+        if (systemLoadAverage >= 0) {
+            int cores = osBean.getAvailableProcessors();
+            if (cores > 0) {
+                return Math.min(100.0, (systemLoadAverage / cores) * 100.0);
+            }
+        }
+        return 0;
     }
 
     // --- Admin subscription ---

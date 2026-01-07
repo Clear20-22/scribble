@@ -26,6 +26,7 @@ public class ClientHandler implements Runnable {
     private final AtomicBoolean running;
     private Thread writerThread;
     private int messagesSinceReset;
+    private CountingOutputStream countingOut;
 
     // Unique client identifier
     private final String clientId;
@@ -60,7 +61,8 @@ public class ClientHandler implements Runnable {
 
     private void initializeStreams() {
         try {
-            out = new ObjectOutputStream(socket.getOutputStream());
+            countingOut = new CountingOutputStream(socket.getOutputStream());
+            out = new ObjectOutputStream(countingOut);
             out.flush();
             in = new ObjectInputStream(socket.getInputStream());
         } catch (IOException e) {
@@ -75,9 +77,7 @@ public class ClientHandler implements Runnable {
                 try {
                     Message message = outgoing.take();
                     synchronized (out) {
-                        // Estimate message size before sending
-                        int estimatedSize = estimateMessageSize(message);
-
+                        long beforeBytes = countingOut != null ? countingOut.getCount() : 0;
                         out.writeObject(message);
                         out.flush();
                         messagesSinceReset++;
@@ -87,7 +87,13 @@ public class ClientHandler implements Runnable {
                         }
 
                         // Record TX stats
-                        recordTx(message, estimatedSize);
+                        int bytesWritten = 0;
+                        if (countingOut != null) {
+                            bytesWritten = (int) Math.max(0, countingOut.getCount() - beforeBytes);
+                        } else {
+                            bytesWritten = estimateMessageSize(message);
+                        }
+                        recordTx(message, bytesWritten);
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -384,6 +390,11 @@ public class ClientHandler implements Runnable {
             return;
         }
 
+        if (!isAdminSubscriberAllowed(message)) {
+            send(new ErrorMessage("MONITORING_DENIED", "Admin metrics access denied"));
+            return;
+        }
+
         var broadcaster = server.getMonitorBroadcaster();
         if (broadcaster == null) {
             return;
@@ -487,7 +498,7 @@ public class ClientHandler implements Runnable {
 
         ServerNetworkStats serverStats = server.getNetworkStats();
         if (serverStats != null) {
-            serverStats.recordMessageSent(clientId, msgType, sizeBytes);
+            serverStats.recordMessageSent(clientId, msgType, sizeBytes, roomName);
         }
     }
 
@@ -543,6 +554,67 @@ public class ClientHandler implements Runnable {
             return base + 5000; // Metrics messages are large
         } else {
             return base + 50; // Default small message
+        }
+    }
+
+    private boolean isAdminSubscriberAllowed(SubscribeMetricsMessage message) {
+        if (socket.getInetAddress() != null && socket.getInetAddress().isLoopbackAddress()) {
+            return true;
+        }
+        String token = getAdminToken();
+        if (token == null || token.isBlank()) {
+            return false;
+        }
+        String provided = message != null ? message.getAdminToken() : null;
+        return token.equals(provided);
+    }
+
+    private String getAdminToken() {
+        String token = System.getProperty("scribble.monitor.adminToken");
+        if (token == null || token.isBlank()) {
+            token = System.getenv("SCRIBBLE_MONITOR_TOKEN");
+        }
+        return token;
+    }
+
+    private static final class CountingOutputStream extends OutputStream {
+        private final OutputStream delegate;
+        private long count;
+
+        private CountingOutputStream(OutputStream delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            delegate.write(b);
+            count++;
+        }
+
+        @Override
+        public void write(byte[] b) throws IOException {
+            delegate.write(b);
+            count += b.length;
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            delegate.write(b, off, len);
+            count += len;
+        }
+
+        @Override
+        public void flush() throws IOException {
+            delegate.flush();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
+        }
+
+        public long getCount() {
+            return count;
         }
     }
 }

@@ -38,15 +38,27 @@ public final class PacketLogEntry implements Serializable {
     private final int sizeBytes;
     private final String clientId;
     private final String roomId;
+    private final String src;
+    private final String dst;
+    private final Integer recipientCount;
 
     public PacketLogEntry(long timestamp, Direction direction, String messageType,
             int sizeBytes, String clientId, String roomId) {
+        this(timestamp, direction, messageType, sizeBytes, clientId, roomId, null, null, null);
+    }
+
+    public PacketLogEntry(long timestamp, Direction direction, String messageType,
+            int sizeBytes, String clientId, String roomId,
+            String src, String dst, Integer recipientCount) {
         this.timestamp = timestamp;
         this.direction = direction;
         this.messageType = messageType;
         this.sizeBytes = sizeBytes;
         this.clientId = clientId;
         this.roomId = roomId;
+        this.src = src;
+        this.dst = dst;
+        this.recipientCount = recipientCount;
     }
 
     public long getTimestamp() {
@@ -73,8 +85,24 @@ public final class PacketLogEntry implements Serializable {
         return roomId;
     }
 
+    public String getSrc() {
+        return src;
+    }
+
+    public String getDst() {
+        return dst;
+    }
+
+    public Integer getRecipientCount() {
+        return recipientCount;
+    }
+
     @Override
     public String toString() {
+        if (src != null && dst != null) {
+            return String.format("[%tT] %s %s -> %s %s (%d B) room=%s",
+                    timestamp, direction.getSymbol(), src, dst, messageType, sizeBytes, roomId);
+        }
         return String.format("[%tT] %s %s %s (%d B) client=%s room=%s",
                 timestamp, direction.getSymbol(), direction.getLabel(),
                 messageType, sizeBytes, clientId, roomId);

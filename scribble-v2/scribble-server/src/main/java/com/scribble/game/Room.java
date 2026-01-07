@@ -585,6 +585,13 @@ public class Room {
             int estimatedSize = estimateMessageSize(message);
             stats.recordBroadcast(recipientCount, recipientCount * estimatedSize);
         }
+
+        var serverStats = server.getNetworkStats();
+        if (serverStats != null && recipientCount > 0) {
+            int estimatedSize = estimateMessageSize(message);
+            serverStats.recordBroadcastPacket(name, message.getClass().getSimpleName(),
+                    recipientCount, recipientCount * estimatedSize);
+        }
     }
 
     private void broadcastToOthers(String sender, Message message) {
@@ -601,6 +608,13 @@ public class Room {
         if (stats != null && recipientCount > 0) {
             int estimatedSize = estimateMessageSize(message);
             stats.recordBroadcast(recipientCount, recipientCount * estimatedSize);
+        }
+
+        var serverStats = server.getNetworkStats();
+        if (serverStats != null && recipientCount > 0) {
+            int estimatedSize = estimateMessageSize(message);
+            serverStats.recordBroadcastPacket(name, message.getClass().getSimpleName(),
+                    recipientCount, recipientCount * estimatedSize);
         }
     }
 
